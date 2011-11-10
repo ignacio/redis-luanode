@@ -682,8 +682,12 @@ commands = set_union({"get", "set", "setnx", "setex", "append", "strlen", "del",
 
 for _, command in ipairs(commands) do
 	RedisClient[command] = function (self, args, callback, ...)
-		if type(args) == "table" and type(callback) == "function" then
-			return self:send_command(command, args, callback)
+		if type(args) == "table" then
+			if type(callback) == "function" then
+				return self:send_command(command, args, callback)
+			else
+				return self:send_command(command, args)
+			end
 		else
 			return self:send_command(command, {args, callback, ...})
 		end
