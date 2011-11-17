@@ -341,6 +341,7 @@ function RedisClient:connection_gone (why)
 	-- If this is a requested shutdown, then don't retry
 	if self.closing then
 		self.retry_timer = nil
+		self.stream._events = {}
 		return
 	end
 
@@ -626,7 +627,12 @@ end
 ---
 --
 function RedisClient:finish ()
-	self.stream._events = {}
+	self.closing = true
+	-- if there's a pending retry, can't clear events (an error will fire and bring me down)
+	-- do it later
+	if not self.retry_timer then
+		self.stream._events = {}	-- no deberia tocar a prepo este field de un EventEmitter
+	end
 	self.connected = false
 	self.ready = false
 	return self.stream:finish()
