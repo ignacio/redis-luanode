@@ -169,7 +169,7 @@ function RedisClient:on_connect ()
 	self.emitted_end = false
 	self.retry_timer = nil
 	self.current_retry_delay = self.retry_delay
-	self.stream:setNoDelay()
+	self.stream:setNoDelay(true)
 	self.stream:setTimeout(0)
 
 	self:init_parser()
