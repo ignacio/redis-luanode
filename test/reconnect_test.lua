@@ -1,7 +1,9 @@
 package.path = "../src/?.lua;../src/?/init.lua;".. package.path
 require "luanode.utils"
 
-local redis  = require("redis-luanode").createClient()
+local redis  = require("redis-luanode").createClient(nil, nil, {
+    max_attempts = 2
+})
 --require("redis-luanode").debug_mode = true
 
 redis:on("error", function (self, err)
@@ -14,6 +16,9 @@ end)
 
 redis:on("reconnecting", function (self, arg)
     console.log("Redis reconnecting: " .. luanode.utils.inspect(arg))
+end)
+redis:on("not_reconnecting", function (self, arg)
+    console.log("Redis NOT reconnecting: " .. luanode.utils.inspect(arg))
 end)
 redis:on("connect", function ()
     console.log("Redis connected.")
@@ -28,6 +33,6 @@ setInterval(function ()
             console.log(now .. " Redis reply: " .. res)
         end
     end)
-end, 200)
+end, 100)
 
 process:loop()

@@ -61,6 +61,14 @@ end
 
 local RedisClient = Class.InheritsFrom(EventEmitter)
 
+local function initialize_retry_vars (client)
+	client.retry_timer = nil	-- null
+    client.retry_totaltime = 0
+    client.retry_delay = 150
+    client.retry_backoff = 1.7
+    client.attempts = 1
+end
+
 ---
 --
 function RedisClient:__init (stream, options)
@@ -78,8 +86,10 @@ function RedisClient:__init (stream, options)
 	c.connected = false
 	c.ready = false
 	c.connections = 0
-	if not options.socket_nodelay then
-        c.options.socket_nodelay = true
+	if type(options.socket_nodelay) == "boolean" then
+        c.options.socket_nodelay = options.socket_nodelay
+    else
+    	c.options.socket_nodelay = true
     end
 	c.should_buffer = false
 	c.command_queue_high_water = c.options.command_queue_high_water or 1000
@@ -91,26 +101,19 @@ function RedisClient:__init (stream, options)
 	c.command_queue = {}--new Queue(); // holds sent commands to de-pipeline them
 	c.offline_queue = {}--new Queue(); // holds commands issued but not able to be sent
 	c.commands_sent = 0
-	
-	-- -->
-	--c.retry_delay = 250 -- inital reconnection delay
-	--c.current_retry_delay = c.retry_delay
-	--c.retry_backoff = 1.7 -- each retry waits current delay * retry_backoff
 	c.connect_timeout = false
 	if type(options.connect_timeout) == "number" and options.connect_timeout > 0 then
 		c.connect_timeout = options.connect_timeout
 	end
-	c.retry_totaltime = 0
-	c.retry_delay = 250
-	c.retry_backoff = 1.7
-	-- <--
-	
-	c.subscriptions = false
-	c.monitoring = false
+	initialize_retry_vars(c)	
+	c.pub_sub_mode = false
+    c.subscription_set = { sub = {}, psub = {} }
+    c.monitoring = false
 	c.closing = false
 	c.server_info = {}
 	c.auth_pass = nil
 	c.parser_module = nil
+	c.selected_db = nil		-- save the selected db here, used when reconnecting
 
 	c.stream:on("connect", function(self)
 		c:on_connect()
@@ -121,34 +124,7 @@ function RedisClient:__init (stream, options)
 	end)
 
 	c.stream:on("error", function(self, msg)
-		if c.closing then return end
-
-		local message = ("Redis connection to %s:%d failed - %s"):format(c.host, c.port, msg)
-		if debug_mode then
-			console.warn(message)
-		end
-		for _,v in ipairs(c.offline_queue) do
-			-- TODO: chequear esto
-			if type(v[2]) == "function" then
-				v[2](message)
-			end
-		end
-		c.offline_queue = {}
-
-		for _,v in ipairs(c.command_queue) do
-			-- TODO: chequear esto
-			if type(v[2]) == "function" then
-				v[2](message)
-			end
-		end
-		c.command_queue = {}
-
-		c.connected = false
-		c.ready = false
-
-		c:emit("error", message)
-
-		c:connection_gone("error")
+		c:on_error(msg)
 	end)
 
 	c.stream:on("close", function(stream)
@@ -167,15 +143,54 @@ function RedisClient:__init (stream, options)
 	return c
 end
 
+-- flush offline_queue and command_queue, erroring any items with a callback first
+function RedisClient:flush_and_error (message)
+    for _, command_obj in ipairs(self.offline_queue) do
+		if type(command_obj.callback) == "function" then
+			command_obj.callback(self, message)
+		end
+	end
+    self.offline_queue = {}
+    
+    for _, command_obj in ipairs(self.command_queue) do
+		if type(command_obj.callback) == "function" then
+			command_obj.callback(self, message)
+		end
+	end
+    self.command_queue = {}
+end
+
+function RedisClient:on_error (msg)
+
+    if self.closing then
+        return
+    end
+
+    local message = ("Redis connection to %s:%d failed - %s"):format(self.host, self.port, msg)
+    if debug_mode then
+        console.warn(message)
+    end
+
+    self:flush_and_error(message)
+
+    self.connected = false
+    self.ready = false
+
+    self:emit("error", message)
+    -- "error" events get turned into exceptions if they aren't listened for.  If the user handled this error
+    -- then we should try to reconnect.
+    self:connection_gone("error")
+end
+
 ---
 --
 function RedisClient:do_auth ()
 	
 	if debug_mode then
-		console.log("Sending auth to %s:%d socket %s", self.host, self.port, tostring(self.stream._raw_socket))
+		console.log("Sending auth to %s:%d id %d", self.host, self.port, self.connection_id)
 	end
 	self.send_anyway = true
-	self:send_command("auth", {self.auth_pass}, function (err, res)
+	self:send_command("auth", {self.auth_pass}, function (emitter, err, res)
 		if err then
 			if tostring(err):match("LOADING") then
 				-- if redis is still loading the db, it will not authenticate and everything else will fail
@@ -192,7 +207,7 @@ function RedisClient:do_auth ()
 			return self:emit("error", "Auth failed: " .. tostring(res))
 		end
 		if debug_mode then
-			console.log("Auth succeeded %s:%d socket %s", self.host, self.port, tostring(self.stream._raw_socket))
+			console.log("Auth succeeded %s:%d id %d", self.host, self.port, self.connection_id)
 		end
 		if self.auth_callback then
 			self:auth_callback(err, res)
@@ -202,8 +217,7 @@ function RedisClient:do_auth ()
 		-- now we are really connected
 		self:emit("connect")
 		if self.options.no_ready_check then
-			self.ready = true
-			self:send_offline_queue()
+			self:on_ready()
 		else
 			self:ready_check()
 		end
@@ -215,7 +229,7 @@ end
 --
 function RedisClient:on_connect ()
 	if debug_mode then
-		console.log("Stream connected %s:%d socket %s", self.host, self.port, tostring(self.stream._raw_socket))
+		console.log("Stream connected %s:%d id %d", self.host, self.port, self.connection_id)
 	end
 
 	self.connected = true
@@ -224,16 +238,11 @@ function RedisClient:on_connect ()
 	self.connections = self.connections + 1
 	self.command_queue = {}--new Queue();
 	self.emitted_end = false
-	-- -->
-	--self:initialize_retry_vars()
+	initialize_retry_vars(self)
     if self.options.socket_nodelay then
 	  	self.stream:setNoDelay()
     end
-	
-	self.retry_timer = nil
-	self.current_retry_delay = self.retry_delay
-	self.stream:setNoDelay()
-	self.stream:setTimeout(0)
+    self.stream:setTimeout(0)	
 
 	self:init_parser()
 
@@ -243,8 +252,7 @@ function RedisClient:on_connect ()
 		self:emit("connect")
 
 		if self.options.no_ready_check then
-			self.ready = true
-			self:send_offline_queue()
+			self:on_ready()
 		else
 			self:ready_check()
 		end
@@ -293,64 +301,101 @@ function RedisClient:init_parser ()
 	end)
 end
 
+function RedisClient:on_ready ()
+	
+	self.ready = true
+	
+	-- magically restore any modal commands from a previous connection
+    if self.selected_db then
+        self:send_command('select', {self.selected_db})
+    end
+    if self.pub_sub_mode == true then
+    	for channel in pairs(self.subscription_set.sub) do
+    		if debug_mode then
+                console.warn("sending pub/sub on_ready sub, " .. channel)
+            end
+            self:send_command("sub", {channel})
+    	end
+    	for channel in pairs(self.subscription_set.psub) do
+    		if debug_mode then
+                console.warn("sending pub/sub on_ready psub, " .. channel)
+            end
+            self:send_command("psub", {channel})
+    	end
+    	--[[
+        Object.keys(this.subscription_set).forEach(function (key) {
+            var parts = key.split(" ");
+            if debug_mode then
+                console.warn("sending pub/sub on_ready " + parts[0] + ", " + parts[1]);
+            end
+            self:send_command(parts[1], {parts[2]})
+        });
+        --]]
+    elseif self.monitoring then
+        self:send_command("monitor")
+    else
+        self:send_offline_queue()
+    end
+    self:emit("ready")
+end
+
+function RedisClient:on_info_cmd (err, res)	-- implicit first arg, self
+	if err then
+		return self:emit("error", "Ready check failed: " .. err)
+	end
+
+	local retry_time
+
+	local info = {}
+	res:gsub('([^\r\n]*)\r\n', function(kv)
+		local k,v = kv:match(('([^:]*):([^:]*)'):rep(1))
+		if (k:match('db%d+')) then
+			info[k] = {}
+			v:gsub(',', function(dbkv)
+				local dbk,dbv = kv:match('([^:]*)=([^:]*)')
+				info[k][dbk] = dbv
+			end)
+		else
+			info[k] = v
+		end
+	end)
+	
+	info.versions = {}
+	
+	for num in info.redis_version:gmatch("([^%.])") do
+		table.insert(info.versions, tonumber(num))
+	end
+
+	-- expose info key/vals to users
+	self.server_info = info
+
+	if (not info.loading or (info.loading and info.loading == "0")) then
+		if debug_mode then console.log("Redis server ready.") end
+		self:on_ready()
+	else
+		retry_time = info.loading_eta_seconds * 1000
+		if retry_time > 1000 then
+			retry_time = 1000
+		end
+		if debug_mode then console.log("Redis server still loading, trying again in " .. retry_time) end
+		setTimeout(send_info_cmd, retry_time)
+		setTimeout(function ()
+            self:ready_check()
+        end, retry_time)
+	end
+end
+
 ---
 --
 function RedisClient:ready_check ()
 
-	local function send_info_cmd()
-		if debug_mode then console.log("checking server ready state...") end
+	if debug_mode then console.log("checking server ready state...") end
 
-		self.send_anyway = true     -- secret flag to send_command to send something even if not "ready"
-		self:info(function (self, err, res)
-			if err then
-				return self:emit("error", "Ready check failed: " .. err)
-			end
-
-			local retry_time
-
-			local info = {}
-			res:gsub('([^\r\n]*)\r\n', function(kv)
-				local k,v = kv:match(('([^:]*):([^:]*)'):rep(1))
-				if (k:match('db%d+')) then
-					info[k] = {}
-					v:gsub(',', function(dbkv)
-						local dbk,dbv = kv:match('([^:]*)=([^:]*)')
-						info[k][dbk] = dbv
-					end)
-				else
-					info[k] = v
-				end
-			end)
-			
-			info.versions = {}
-			
-			for num in info.redis_version:gmatch("([^%.])") do
-				table.insert(info.versions, tonumber(num))
-			end
-			--obj.redis_version
-
-			-- expose info key/vals to users
-			self.server_info = info
-
-			if (not info.loading or (info.loading and info.loading == "0")) then
-				if debug_mode then console.log("Redis server ready.") end
-				self.ready = true
-
-				self:send_offline_queue()
-				self:emit("ready")
-			else
-				retry_time = info.loading_eta_seconds * 1000
-				if retry_time > 1000 then
-					retry_time = 1000
-				end
-				if debug_mode then console.log("Redis server still loading, trying again in " .. retry_time) end
-				setTimeout(send_info_cmd, retry_time)
-			end
-		end)
-		self.send_anyway = false
-	end
-
-	send_info_cmd()
+	self.send_anyway = true     -- secret flag to send_command to send something even if not "ready"
+	self:info(function(_, err, res)
+		self:on_info_cmd(err, res)
+	end)
+	self.send_anyway = false
 end
 
 ---
@@ -384,61 +429,73 @@ function RedisClient:connection_gone (why)
 	-- If a retry is already in progress, just let that happen
 	if self.retry_timer then return end
 
-	-- Note that this may trigger another "close" or "end" event
-	self.stream:destroy()
-
 	if debug_mode then
 		console.warn("Redis connection is gone from %s event.", why)
 	end
 	self.connected = false
 	self.ready = false
-	self.subscriptions = false
-	self.monitoring = false
 
 	-- since we are collapsing end and close, users don't expect to be called twice
 	if not self.emitted_end then
 		self:emit("end")
 		self.emitted_end = true
 	end
-
-	for _, v in ipairs(self.command_queue) do
-		if type(v[2]) == "function" then
-			v[2]("Server connection closed")
-		end
-	end
-	self.command_queue = {}
+	
+	self:flush_and_error("Redis connection gone from " .. tostring(why) .. " event.")
 
 	-- If this is a requested shutdown, then don't retry
 	if self.closing then
 		self.retry_timer = nil
-		self.stream._events = {}
+		self.stream._events = {}	-- <-- this is a hack, don't let the stream emit more events
+		if debug_mode then
+            console.warn("connection ended from quit command, not retrying.")
+        end
 		return
 	end
 
-	self.current_retry_delay = self.current_retry_delay + self.retry_delay * self.retry_backoff
+	self.retry_delay = math.floor(self.retry_delay * self.retry_backoff)
 
 	if debug_mode then
-		console.log("Retry connection in %d ms", self.current_retry_delay)
+		console.log("Retry connection in %d ms", self.retry_delay)
 	end
+	
+	if self.max_attempts and self.attempts >= self.max_attempts then
+		self.retry_timer = nil
+		-- TODO - some people need a "Redis is Broken mode" for future commands that errors immediately, and others
+        -- want the program to exit.  Right now, we just log, which doesn't really help in either case.
+        console.error("redis-luanode: Couldn't get Redis connection after " .. self.max_attempts .. " attempts.")
+        return
+   	end
+   	
 	self.attempts = self.attempts + 1
 	self:emit("reconnecting", {
-		delay = self.current_retry_delay,
+		delay = self.retry_delay,
 		attempt = self.attempts
 	})
 	self.retry_timer = setTimeout(function ()
 		if debug_mode then
 			console.log("Retrying connection...")
 		end
+		
+		self.retry_totaltime = self.retry_totaltime + self.retry_delay
+		
+		if self.connect_timeout and self.retry_totaltime >= self.connect_timeout then
+			self.retry_timer = nil
+			-- TODO - engage Redis is Broken mode for future commands, or whatever
+            console.error("redis-luanode: Couldn't get Redis connection after " .. self.retry_totaltime .. "ms.")
+            return
+        end
+        
 		self.stream:connect(self.port, self.host)
 		self.retry_timer = nil
-	end, self.current_retry_delay)
+	end, self.retry_delay)
 end
 
 ---
 --
 function RedisClient:on_data (data)
 	if debug_mode then
-		console.log("net read %s:%d socket %s: %s", self.host, self.port, tostring(self.stream._raw_socket), data)
+		console.log("net read %s:%d id %d: %s", self.host, self.port, self.connection_id, data)
 	end
 
 	local ok, err = pcall(self.reply_parser.execute, self.reply_parser, data)
@@ -457,7 +514,7 @@ function RedisClient:return_error (err)
 	local command_obj = table.remove(self.command_queue, 1)
 	local queue_len = #self.command_queue
 
-	if self.subscriptions == false and queue_len == 0 then
+	if self.pub_sub_mode == false and queue_len == 0 then
 		self:emit("idle")
 		self.command_queue = {}
 	end
@@ -475,7 +532,7 @@ function RedisClient:return_error (err)
 			end)
 		end
 	else
-		console.log("node_redis: no callback to send error: %s", err.message)
+		console.log("redis-luanode: no callback to send error: %s", err)
 		-- this will probably not make it anywhere useful, but we might as well throw
 		process.nextTick(function ()
 			error(err)
@@ -483,13 +540,22 @@ function RedisClient:return_error (err)
 	end
 end
 
+-- if a callback throws an exception, re-throw it on a new stack so the parser can keep going
+local function try_callback(self, callback, reply)
+	local ok, err = pcall(callback, self, nil, reply)
+    if not ok then
+        process.nextTick(function ()
+            error(err)
+        end)
+    end
+end
+
 ---
 --
 function RedisClient:return_reply (reply)
-	local command_obj = table.remove(self.command_queue, 1)
 	local queue_len = #self.command_queue
 
-	if self.subscriptions == false and queue_len == 0 then
+	if self.pub_sub_mode == false and queue_len == 0 then
 		self:emit("idle")
 		self.command_queue = {}
 	end
@@ -497,6 +563,8 @@ function RedisClient:return_reply (reply)
 		self:emit("drain")
 		self.should_buffer = false
 	end
+	
+	local command_obj = table.remove(self.command_queue, 1)
 
 	if command_obj and not command_obj.sub_command then
 		if type(command_obj.callback) == "function" then
@@ -507,18 +575,12 @@ function RedisClient:return_reply (reply)
 					reply = reply_to_object(reply)
 				end
 			end
-
-			local ok, err = pcall(command_obj.callback, self, nil, reply)
-			if not ok then
-				-- if a callback throws an exception, re-throw it on a new stack so the parser can keep going
-				process.nextTick(function ()
-					error(err)
-				end)
-			end
+			
+			try_callback(self, command_obj.callback, reply)
 		elseif debug_mode then
 			console.log("no callback for reply: " .. tostring(reply))-- && reply.toString && reply.toString()));
 		end
-	elseif self.subscriptions or (command_obj and command_obj.sub_command) then
+	elseif self.pub_sub_mode or (command_obj and command_obj.sub_command) then
 		if type(reply) == "table" then -- is array?
 			local kind = reply[1]
 
@@ -529,11 +591,16 @@ function RedisClient:return_reply (reply)
 			elseif kind == "subscribe" or kind == "unsubscribe" or kind == "psubscribe" or kind == "punsubscribe" then
 				--console.error("ACA", luanode.utils.inspect(reply))
 				if reply[3] == "0" then
-					self.subscriptions = false
-					if self.debug_mode then
+					self.pub_sub_mode = false
+					if debug_mode then
 						console.log("All subscriptions removed, exiting pub/sub mode")
 					end
 				end
+				-- subscribe commands take an optional callback and also emit an event, but only the first response is included in the callback
+                -- TODO - document this or fix it so it works in a more obvious way
+                if command_obj and type(command_obj.callback) == "function" then
+                	try_callback(self, command_obj.callback, reply[2])
+                end
 				self:emit(kind, reply[2], tonumber(reply[3])) -- channel, count
 			else
 				error("subscriptions are active but got unknown reply type " .. kind)
@@ -542,15 +609,21 @@ function RedisClient:return_reply (reply)
 			error("subscriptions are active but got an invalid reply: " .. reply)
 		end
 	elseif self.monitoring then
-		--local len = reply.indexOf(" ");
-		--timestamp = reply.slice(0, len);
-		---- TODO - this de-quoting doesn't work correctly if you put JSON strings in your values.
-		--args = reply.slice(len + 1).match(/"[^"]+"/g).map(function (elem) {
-			--return elem.replace(/"/g, "");
-		--});
-		--self:emit("monitor", timestamp, args)
+		--console.fatal(reply)
+		error("NOT IMPLEMENTED")
+		local timestamp, rest = reply:match([[([^%s]+)%s[^"]-(".+)]])
+		console.log("-->%s<--", rest)
+		local args = {}
+		rest = rest:gsub([[\"]], "\"")
+		console.log("-->%s<--", rest)
+		for coso in rest:gmatch("\"(.-)\"") do
+			console.error(1, coso)
+		end
+		--table.insert(info.versions, tonumber(num))
+		console.fatal(timestamp, rest)
+		self:emit("monitor", timestamp, args)
 	else
-		error("node_redis command queue state error. If you can reproduce this, please report it.")
+		error("redis-luanode command queue state error. If you can reproduce this, please report it.")
 	end
 end
 
@@ -587,8 +660,7 @@ function RedisClient:send_command (command, args, callback)
             --//     client.command(arg1, arg2);   (callback is optional)
             --//       send_command(command, [arg1, arg2]);
             if type(args[#args]) == "function" then
-                callback = args[#args]
-                args[#args] = nil
+                callback = table.remove(args)
             end
         else
             error("send_command: last argument must be a callback or undefined")
@@ -602,7 +674,7 @@ function RedisClient:send_command (command, args, callback)
     --  and converts to:
     --     client.command(arg1, arg2, arg3, arg4, cb);
     -- which is convenient for some things like sadd
-    --if (Array.isArray(args[args.length - 1])) {
+    --if (args.length > 0 && Array.isArray(args[args.length - 1])) {
         --args = args.slice(0, -1).concat(args[args.length - 1]);
     --}
 
@@ -622,30 +694,24 @@ function RedisClient:send_command (command, args, callback)
     end
 
     if command == "subscribe" or command == "psubscribe" or command == "unsubscribe" or command == "punsubscribe" then
-        if self.subscriptions == false and debug_mode then
-            console.log("Entering pub/sub mode from %q", command)
-        end
-        command_obj.sub_command = true
-        self.subscriptions = true
+        self:pub_sub_command(command_obj)
     elseif command == "monitor" then
         self.monitoring = true
     elseif command == "quit" then
         self.closing = true
-    elseif self.subscriptions == true then
+    elseif self.pub_sub_mode == true then
         error("Connection in pub/sub mode, only pub/sub commands may be used")
     end
     table.insert(self.command_queue, command_obj)
     self.commands_sent = self.commands_sent + 1
 
-    local elem_count = 1
-    local buffer_args = false;
+    local buffer_args = false
 
     --elem_count = elem_count + args_len
-    elem_count = elem_count + #args
+    local elem_count = #args + 1
 
     -- Always use "Multi bulk commands", but if passed any Buffer args, then do multiple writes, one for each arg
     -- This means that using Buffers in commands is going to be slower, so use Strings if you don't already have a Buffer.
-    -- Also, why am I putting user documentation in the library source code?
 
     command_str = "*" .. elem_count .. "\r\n$" .. #command .. "\r\n" .. command .. "\r\n"
 
@@ -659,7 +725,7 @@ function RedisClient:send_command (command, args, callback)
             command_str = command_str .. "$" .. #arg .. "\r\n" .. arg .. "\r\n"
         end
         if debug_mode then
-            console.log("send %s:%d socket %s: %s", self.host, self.port, tostring(self.stream._raw_socket), command_str)
+            console.log("send %s:%d id %d: %s", self.host, self.port, self.connection_id, command_str)
         end
         if not stream:write(command_str) then
             buffered_writes = buffered_writes + 1
@@ -692,6 +758,42 @@ function RedisClient:send_command (command, args, callback)
     return not self.should_buffer
 end
 
+function RedisClient:pub_sub_command (command_obj)
+    
+    if self.pub_sub_mode == false and debug_mode then
+        console.log("Entering pub/sub mode from " .. command_obj.command)
+    end
+    self.pub_sub_mode = true
+    command_obj.sub_command = true
+
+    local command = command_obj.command
+    local args = command_obj.args
+    local key
+    if command == "subscribe" or command == "psubscribe" then
+        if command == "subscribe" then
+            key = "sub"
+        else
+            key = "psub"
+        end
+        for i = 1, #args do
+            self.subscription_set[key][args[i]] = true
+        end
+    else
+        if command == "unsubscribe" then
+            key = "sub"
+        else
+            key = "psub"
+        end
+        for i = 1, #args do
+            self.subscription_set[key][args[i]] = nil
+        end
+        
+        for k,v in pairs(self.subscription_set[key]) do
+        	console.fatal("quedo", k,v)
+        end
+    end
+end
+
 ---
 --
 function RedisClient:finish ()
@@ -714,9 +816,7 @@ function Multi:__init (client, args)
 	local t = Class.construct(Multi)
 	t.client = client
 	t.queue = {{"MULTI"}}
-	--if (Array.isArray(args)) {
-	  --  this.queue = this.queue.concat(args);
-	--}
+	
 	if type(args) == "table" then
 		for k,v in ipairs(args) do
 			table.insert(t.queue, v)
@@ -778,10 +878,22 @@ for _, command in ipairs(commands) do
 	Multi[command:upper()] = Multi[command]
 end
 
+-- store db in self.select_db to restore it on reconnect
+function RedisClient:select (db, callback)
+	self:send_command('select', {db}, function (emitter, err, res)
+        if not err then
+            self.selected_db = db
+        end
+        if type(callback) == 'function' then
+            callback(emitter, err, res)
+        end
+    end)
+end
+RedisClient.SELECT = RedisClient.select
+
 ---
 -- Stash auth for connect and reconnect.  Send immediately if already connected.
 function RedisClient:auth (...)
-	--var args = to_array(arguments)
 	local args = {...}
 	self.auth_pass = args[1]
 	self.auth_callback = args[2]
@@ -977,15 +1089,6 @@ function RedisClient:MULTI (args)
 end
 
 
----
---
-function print (redis_client, err, reply)
-	if err then
-		console.log("Error: %s", err)
-	else
-		console.log("Reply: %s", reply)
-	end
-end
 
 ---
 --
@@ -1001,4 +1104,14 @@ function createClient (port, host, options)
 	redis_client.host = host
 	
 	return redis_client
+end
+
+---
+--
+function print (redis_client, err, reply)
+	if err then
+		console.log("Error: %s", err)
+	else
+		console.log("Reply: %s", reply)
+	end
 end
