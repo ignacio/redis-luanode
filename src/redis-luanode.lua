@@ -16,13 +16,48 @@ module(..., package.seeall)
 -- can set this to true to enable for all connections
 debug_mode = false
 
-
 local defaults = {
 	host        = '127.0.0.1',
 	port        = 6379,
 	tcp_nodelay = true,
 	path        = nil
 }
+
+local connection_id = 0
+
+-- helper function to clone tables
+local function clone (t)
+	assert(type(t) == "table")
+	
+	local n = {}
+	
+	for k,v in pairs(t) do
+		if type(k) == "table" then
+			k = clone(k)
+		end
+		if type(v) == "table" then
+			v = clone(v)
+		end
+		n[k] = v
+	end
+	
+	return n
+end
+
+-- hgetall converts its replies to a table.  If the reply is empty, nil is returned.
+function reply_to_object (reply)
+    if #reply == 0 then
+        return nil
+    end
+
+	local obj = {}
+	for i = 1, #reply, 2 do
+		local key = reply[i]
+		local val = reply[i + 1]
+		obj[key] = val
+	end
+	return obj
+end
 
 local RedisClient = Class.InheritsFrom(EventEmitter)
 
@@ -32,22 +67,44 @@ function RedisClient:__init (stream, options)
 
 	local c = Class.construct(RedisClient)
 	
-	c.stream = stream
-	c.options = options or {}
+	options = options or {}
 	
+	c.stream = stream
+	c.options = options
+	
+	connection_id = connection_id + 1
+	
+	c.connection_id = connection_id
 	c.connected = false
 	c.ready = false
 	c.connections = 0
-	c.attempts = 1
+	if not options.socket_nodelay then
+        c.options.socket_nodelay = true
+    end
 	c.should_buffer = false
 	c.command_queue_high_water = c.options.command_queue_high_water or 1000
 	c.command_queue_low_water = c.options.command_queue_low_water or 0
+	c.max_attempts = nil
+	if type(options.max_attempts) == "number" and options.max_attempts > 0 then
+        c.max_attempts = options.max_attempts
+    end
 	c.command_queue = {}--new Queue(); // holds sent commands to de-pipeline them
 	c.offline_queue = {}--new Queue(); // holds commands issued but not able to be sent
 	c.commands_sent = 0
-	c.retry_delay = 250 -- inital reconnection delay
-	c.current_retry_delay = c.retry_delay
-	c.retry_backoff = 1.7 -- each retry waits current delay * retry_backoff
+	
+	-- -->
+	--c.retry_delay = 250 -- inital reconnection delay
+	--c.current_retry_delay = c.retry_delay
+	--c.retry_backoff = 1.7 -- each retry waits current delay * retry_backoff
+	c.connect_timeout = false
+	if type(options.connect_timeout) == "number" and options.connect_timeout > 0 then
+		c.connect_timeout = options.connect_timeout
+	end
+	c.retry_totaltime = 0
+	c.retry_delay = 250
+	c.retry_backoff = 1.7
+	-- <--
+	
 	c.subscriptions = false
 	c.monitoring = false
 	c.closing = false
@@ -167,6 +224,12 @@ function RedisClient:on_connect ()
 	self.connections = self.connections + 1
 	self.command_queue = {}--new Queue();
 	self.emitted_end = false
+	-- -->
+	--self:initialize_retry_vars()
+    if self.options.socket_nodelay then
+	  	self.stream:setNoDelay()
+    end
+	
 	self.retry_timer = nil
 	self.current_retry_delay = self.retry_delay
 	self.stream:setNoDelay()
@@ -258,6 +321,13 @@ function RedisClient:ready_check ()
 					info[k] = v
 				end
 			end)
+			
+			info.versions = {}
+			
+			for num in info.redis_version:gmatch("([^%.])") do
+				table.insert(info.versions, tonumber(num))
+			end
+			--obj.redis_version
 
 			-- expose info key/vals to users
 			self.server_info = info
@@ -430,15 +500,12 @@ function RedisClient:return_reply (reply)
 
 	if command_obj and not command_obj.sub_command then
 		if type(command_obj.callback) == "function" then
-			-- HGETALL special case replies with keyed Buffers
+			-- TODO - confusing and error-prone that hgetall is special cased in two places
 			if reply and 'hgetall' == command_obj.command:lower() then
-				local obj = {}
-				for i = 1, #reply, 2 do
-					local key = reply[i]
-					local val = reply[i + 1]
-					obj[key] = val
+				if type(reply) == "table" then
+					--console.warn("--> HGETALL", luanode.utils.inspect(reply), #reply)
+					reply = reply_to_object(reply)
 				end
-				reply = obj
 			end
 
 			local ok, err = pcall(command_obj.callback, self, nil, reply)
@@ -460,7 +527,8 @@ function RedisClient:return_reply (reply)
 			elseif kind == "pmessage" then
 				self:emit("pmessage", reply[2], reply[3], reply[4]) -- pattern, channel, message
 			elseif kind == "subscribe" or kind == "unsubscribe" or kind == "psubscribe" or kind == "punsubscribe" then
-				if reply[3] == 0 then
+				--console.error("ACA", luanode.utils.inspect(reply))
+				if reply[3] == "0" then
 					self.subscriptions = false
 					if self.debug_mode then
 						console.log("All subscriptions removed, exiting pub/sub mode")
@@ -654,6 +722,8 @@ function Multi:__init (client, args)
 			table.insert(t.queue, v)
 		end
 	end
+	
+	return t
 end
 
 -- take 2 arrays and return the union of their elements
@@ -725,153 +795,178 @@ function RedisClient:auth (...)
 end
 RedisClient.AUTH = RedisClient.auth
 
-function RedisClient:hmget (arg1, arg2, arg3)
-	--if (Array.isArray(arg2) && typeof arg3 === "function") {
-	  --  return this.send_command("hmget", [arg1].concat(arg2), arg3);
-	--} else if (Array.isArray(arg1) && typeof arg2 === "function") {
-		--return this.send_command("hmget", arg1, arg2);
-	--} else {
-		--return this.send_command("hmget", to_array(arguments));
-	--}
-	error("NOT IMPLEMENTED")
+function RedisClient:hmget (arg1, arg2, arg3, ...)
+	if type(arg2) == "table" and type(arg3) == "function" then
+		local t = { arg1 }
+		for _,v in ipairs(arg2) do t[#t + 1] = v end
+		return self:send_command("hmget", t, arg3)
+	
+	elseif type(arg1) == "table" and type(arg2) == "function" then
+		return self:send_command("hmget", arg1, arg2)
+		
+	else
+		return self:send_command("hmget", {arg1, arg2, arg3, ...})
+	end
 end
 RedisClient.HMGET = RedisClient.hmget
 
-function RedisClient:hmset (args, callback)
-	error("NOT IMPLEMENTED")
-	--[[
-	local tmp_args, tmp_keys, i, il, key;
+function RedisClient:hmset (args, callback, ...)
+	if type(args) == "table" and type(callback) == "function" then
+		return self:send_command("hmset", args, callback)
+	end
 
-	if (Array.isArray(args) && typeof callback === "function") {
-		return this.send_command("hmset", args, callback);
-	}
+	args = {args, callback, ...}
+	if type(args[#args]) == "function" then
+		callback = table.remove(args)	-- pop the last element
+	else
+		callback = nil
+	end
 
-	args = to_array(arguments);
-	if (typeof args[args.length - 1] === "function") {
-		callback = args[args.length - 1];
-		args.length -= 1;
-	} else {
-		callback = null;
-	}
+	if #args == 2 and type(args[1]) == "string" and type(args[2]) == "table" then
+		-- User does: client:hmset(key, {key1: val1, key2: val2})
+		local tmp_args = { args[1] }
+		for k,v in pairs(args[2]) do
+			table.insert(tmp_args, k)
+			table.insert(tmp_args, v)
+		end
+		args = tmp_args
+	end
 
-	if (args.length === 2 && typeof args[0] === "string" && typeof args[1] === "object") {
-		// User does: client.hmset(key, {key1: val1, key2: val2})
-		tmp_args = [ args[0] ];
-		tmp_keys = Object.keys(args[1]);
-		for (i = 0, il = tmp_keys.length; i < il ; i++) {
-			key = tmp_keys[i];
-			tmp_args.push(key);
-			tmp_args.push(args[1][key]);
-		}
-		args = tmp_args;
-	}
-
-	return this.send_command("hmset", args, callback);
-	--]]
+	return self:send_command("hmset", args, callback)
 end
 RedisClient.HMSET = RedisClient.hmset
 
-function Multi:hmset ()
-	error("NOT IMPLEMENTED")
-	--[[
-	var args = to_array(arguments), tmp_args;
-	if (args.length >= 2 && typeof args[0] === "string" && typeof args[1] === "object") {
-		tmp_args = [ "hmset", args[0] ];
-		Object.keys(args[1]).map(function (key) {
-			tmp_args.push(key);
-			tmp_args.push(args[1][key]);
-		});
-		if (args[2]) {
-			tmp_args.push(args[2]);
-		}
-		args = tmp_args;
-	} else {
-		args.unshift("hmset");
-	}
+function Multi:hmset (...)
+	local args = {...}
+	local tmp_args
+	
+	if select("#", ...) >= 2 and type(args[1]) == "string" and type(args[2]) == "table" then
+		local tmp_args = { "hmset", args[1] }
+		for k,v in pairs(args[2]) do
+			table.insert(tmp_args, k)
+			table.insert(tmp_args, v)
+		end
+		
+		if args[3] then
+			table.insert(tmp_args, args[3])
+		end
+		args = tmp_args
+	else
+		table.insert(args, 1, "hmset")
+	end
 
-	this.queue.push(args);
-	return this;
-	--]]
+	table.insert(self.queue, args)
+	return self
 end
 Multi.HMSET = Multi.hmset
 
+-- como lo de javascript
+local function splice(array, from)
+	local t = {} 
+	for i = from, #array do
+		t[#t + 1] = array[i]
+	end 
+	return t
+end
+
+
 function Multi:exec (callback)
-	error("NOT IMPLEMENTED")
-	--[[
-	var self = this;
+	-- drain queue, callback will catch "QUEUED" or error
+	-- TODO - get rid of all of these anonymous functions which are elegant but slow
+	for index, args in ipairs(self.queue) do
+		--var command = args[0], obj;
+		--console.warn("queue", luanode.utils.inspect(args))
+		local args_copy = {}
+		local command = args[1]
+		--console.warn(command)
+		if type(args[#args]) == "function" then
+			for i=2, #args - 1 do
+				args_copy[i - 1] = args[i]
+			end
+			--console.warn("cortado", luanode.utils.inspect(args))
+		else
+			--console.warn("por aca")
+			if type(args[2]) == "table" then
+				args_copy = args[2]
+			else
+				for i=2, #args do
+					args_copy[i - 1] = args[i]
+				end
+			end
+		end
+		--if #args == 2 then
+		--	args_copy = args[2]
+		--end
+		--console.warn("args_copy", command, luanode.utils.inspect(args_copy))
+		
+		if cmd == "hmset" and type(args[1]) == "table" then
+			error("NOT IMPLEMENTED")
+			local obj = table.remove(args, -1)
+			for key, value in pairs(obj) do
+				args[#args + 1] = key
+				args[#args + 1] = value
+			end
+		end
+		
+		self.client:send_command(command, args_copy, function (emitter, err, reply)
+			--console.warn("callback", command, emitter, err, reply, index)
+			--console.warn(self, emitter)
+			if err then
+				--console.error("callback err", emitter, err, reply)
+				local cur = self.queue[index]
+				if type(cur[#cur]) == "function" then
+					--console.error("callback err", emitter, err, reply, cur)
+					cur[#cur](self, err)
+				else
+					error(err)
+				end
+				--self.queue.splice(index, 1)
+				--console.warn("queue", luanode.utils.inspect(self.queue))
+				--self.queue = splice(self.queue, index + 2)
+				table.remove(self.queue, index)
+				--console.warn("queue", luanode.utils.inspect(self.queue))
+			end
+		end)
+	end
 
-	// drain queue, callback will catch "QUEUED" or error
-	// TODO - get rid of all of these anonymous functions which are elegant but slow
-	this.queue.forEach(function (args, index) {
-		var command = args[0], obj;
-		if (typeof args[args.length - 1] === "function") {
-			args = args.slice(1, -1);
-		} else {
-			args = args.slice(1);
-		}
-		if (args.length === 1 && Array.isArray(args[0])) {
-			args = args[0];
-		}
-		if (command === 'hmset' && typeof args[1] === 'object') {
-			obj = args.pop();
-			Object.keys(obj).forEach(function (key) {
-				args.push(key);
-				args.push(obj[key]);
-			});
-		}
-		this.client.send_command(command, args, function (err, reply) {
-			if (err) {
-				var cur = self.queue[index];
-				if (typeof cur[cur.length - 1] === "function") {
-					cur[cur.length - 1](err);
-				} else {
-					throw new Error(err);
-				}
-				self.queue.splice(index, 1);
-			}
-		});
-	}, this);
+	-- TODO - make this callback part of Multi.prototype instead of creating it each time
+	return self.client:send_command("EXEC", {}, function (emitter, err, replies)
+		--console.warn("EXEC callback", emitter, err, replies)
+		if err then
+			--console.error("EXEC callback", emitter, err, replies)
+			if callback then
+				callback(self, err)
+				return
+			else
+				error(err)
+			end
+		end
 
-	// TODO - make this callback part of Multi.prototype instead of creating it each time
-	return this.client.send_command("EXEC", [], function (err, replies) {
-		if (err) {
-			if (callback) {
-				callback(new Error(err));
-				return;
-			} else {
-				throw new Error(err);
-			}
-		}
 
-		var i, il, j, jl, reply, args, obj, key, val;
+		if replies then
+			--console.warn("replies", luanode.utils.inspect(replies))
+			for index = 2, #self.queue do-- index, args in ipairs(self.queue) do
+				--console.warn("#replies", #replies)
+				local reply = replies[index - 1]
+				local args = self.queue[index]
+				-- Convert HGETALL reply to object
+				-- TODO - confusing and error-prone that hgetall is special cased in two places
+				if reply and args[1]:lower() == "hgetall" then
+					--console.warn("queue", index, luanode.utils.inspect(args), reply)
+					reply = reply_to_object(reply)
+					replies[index - 1] = reply
+				end
 
-		if (replies) {
-			for (i = 1, il = self.queue.length; i < il; i += 1) {
-				reply = replies[i - 1];
-				args = self.queue[i];
-
-				// Convert HGETALL reply to object
-				if (reply && args[0].toLowerCase() === "hgetall") {
-					obj = {};
-					for (j = 0, jl = reply.length; j < jl; j += 2) {
-						key = reply[j].toString();
-						val = reply[j + 1];
-						obj[key] = val;
-					}
-					replies[i - 1] = reply = obj;
-				}
-
-				if (typeof args[args.length - 1] === "function") {
-					args[args.length - 1](null, reply);
-				}
-			}
-		}
-
-		if (callback) {
-			callback(null, replies);
-		}
-	});
-	--]]
+				if type(args[#args]) == "function" then
+					--console.log("calling")
+					args[#args](self, nil, reply)
+				end
+			end
+		end
+		if callback then
+			callback(self, nil, replies)
+		end
+	end)
 end
 
 function RedisClient:multi (args)
