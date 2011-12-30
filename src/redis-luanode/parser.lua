@@ -281,7 +281,7 @@ function Parser:add_multi_bulk_reply (reply)
 		self.multi_bulk_replies = nil
 		self.multi_bulk_pos = 1--0
 
-		if self.multi_bulk_nested_length == self.multi_bulk_nested_pos then
+		if self.multi_bulk_nested_length == self.multi_bulk_nested_pos - 1 then
 			self:emit("reply", self.multi_bulk_nested_replies)
 			self.multi_bulk_nested_length = 0
 			self.multi_bulk_nested_pos = 1--0;
