@@ -4,7 +4,7 @@ Also based on redis-lua, by Daniele Alessandri
 
 This is mostly a translation of node-redis from JavaScript to Lua.
 
-As both source projects, this one is MIT Licensed.
+As both source projects, this one is also MIT Licensed.
 --]]
 
 local net = require "luanode.net"
@@ -17,10 +17,10 @@ module(..., package.seeall)
 debug_mode = false
 
 local defaults = {
-	host        = '127.0.0.1',
-	port        = 6379,
-	tcp_nodelay = true,
-	path        = nil
+	host		= '127.0.0.1',
+	port		= 6379,
+	tcp_nodelay	= true,
+	path		= nil
 }
 
 local connection_id = 0
@@ -46,9 +46,9 @@ end
 
 -- hgetall converts its replies to a table.  If the reply is empty, nil is returned.
 function reply_to_object (reply)
-    if #reply == 0 then
-        return nil
-    end
+	if #reply == 0 then
+		return nil
+	end
 
 	local obj = {}
 	for i = 1, #reply, 2 do
@@ -63,10 +63,10 @@ local RedisClient = Class.InheritsFrom(EventEmitter)
 
 local function initialize_retry_vars (client)
 	client.retry_timer = nil	-- null
-    client.retry_totaltime = 0
-    client.retry_delay = 150
-    client.retry_backoff = 1.7
-    client.attempts = 1
+	client.retry_totaltime = 0
+	client.retry_delay = 150
+	client.retry_backoff = 1.7
+	client.attempts = 1
 end
 
 ---
@@ -87,28 +87,28 @@ function RedisClient:__init (stream, options)
 	c.ready = false
 	c.connections = 0
 	if type(options.socket_nodelay) == "boolean" then
-        c.options.socket_nodelay = options.socket_nodelay
-    else
-    	c.options.socket_nodelay = true
-    end
+		c.options.socket_nodelay = options.socket_nodelay
+	else
+		c.options.socket_nodelay = true
+	end
 	c.should_buffer = false
 	c.command_queue_high_water = c.options.command_queue_high_water or 1000
 	c.command_queue_low_water = c.options.command_queue_low_water or 0
 	c.max_attempts = nil
 	if type(options.max_attempts) == "number" and options.max_attempts > 0 then
-        c.max_attempts = options.max_attempts
-    end
-	c.command_queue = {}--new Queue(); // holds sent commands to de-pipeline them
-	c.offline_queue = {}--new Queue(); // holds commands issued but not able to be sent
+		c.max_attempts = options.max_attempts
+	end
+	c.command_queue = {}	-- holds sent commands to de-pipeline them
+	c.offline_queue = {}	-- holds commands issued but not able to be sent
 	c.commands_sent = 0
 	c.connect_timeout = false
 	if type(options.connect_timeout) == "number" and options.connect_timeout > 0 then
 		c.connect_timeout = options.connect_timeout
 	end
-	initialize_retry_vars(c)	
+	initialize_retry_vars(c)
 	c.pub_sub_mode = false
-    c.subscription_set = { sub = {}, psub = {} }
-    c.monitoring = false
+	c.subscription_set = { sub = {}, psub = {} }
+	c.monitoring = false
 	c.closing = false
 	c.server_info = {}
 	c.auth_pass = nil
@@ -145,41 +145,41 @@ end
 
 -- flush offline_queue and command_queue, erroring any items with a callback first
 function RedisClient:flush_and_error (message)
-    for _, command_obj in ipairs(self.offline_queue) do
+	for _, command_obj in ipairs(self.offline_queue) do
 		if type(command_obj.callback) == "function" then
 			command_obj.callback(self, message)
 		end
 	end
-    self.offline_queue = {}
-    
-    for _, command_obj in ipairs(self.command_queue) do
+	self.offline_queue = {}
+	
+	for _, command_obj in ipairs(self.command_queue) do
 		if type(command_obj.callback) == "function" then
 			command_obj.callback(self, message)
 		end
 	end
-    self.command_queue = {}
+	self.command_queue = {}
 end
 
 function RedisClient:on_error (msg)
 
-    if self.closing then
-        return
-    end
+	if self.closing then
+		return
+	end
 
-    local message = ("Redis connection to %s:%d failed - %s"):format(self.host, self.port, msg)
-    if debug_mode then
-        console.warn(message)
-    end
+	local message = ("Redis connection to %s:%d failed - %s"):format(self.host, self.port, msg)
+	if debug_mode then
+		console.warn(message)
+	end
 
-    self:flush_and_error(message)
+	self:flush_and_error(message)
 
-    self.connected = false
-    self.ready = false
+	self.connected = false
+	self.ready = false
 
-    self:emit("error", message)
-    -- "error" events get turned into exceptions if they aren't listened for.  If the user handled this error
-    -- then we should try to reconnect.
-    self:connection_gone("error")
+	self:emit("error", message)
+	-- "error" events get turned into exceptions if they aren't listened for.  If the user handled this error
+	-- then we should try to reconnect.
+	self:connection_gone("error")
 end
 
 ---
@@ -236,13 +236,13 @@ function RedisClient:on_connect ()
 	self.ready = false
 	self.attempts = 0
 	self.connections = self.connections + 1
-	self.command_queue = {}--new Queue();
+	self.command_queue = {}
 	self.emitted_end = false
 	initialize_retry_vars(self)
-    if self.options.socket_nodelay then
-	  	self.stream:setNoDelay()
-    end
-    self.stream:setTimeout(0)	
+	if self.options.socket_nodelay then
+		self.stream:setNoDelay()
+	end
+	self.stream:setTimeout(0)
 
 	self:init_parser()
 
@@ -306,37 +306,28 @@ function RedisClient:on_ready ()
 	self.ready = true
 	
 	-- magically restore any modal commands from a previous connection
-    if self.selected_db then
-        self:send_command('select', {self.selected_db})
-    end
-    if self.pub_sub_mode == true then
-    	for channel in pairs(self.subscription_set.sub) do
-    		if debug_mode then
-                console.warn("sending pub/sub on_ready sub, " .. channel)
-            end
-            self:send_command("sub", {channel})
-    	end
-    	for channel in pairs(self.subscription_set.psub) do
-    		if debug_mode then
-                console.warn("sending pub/sub on_ready psub, " .. channel)
-            end
-            self:send_command("psub", {channel})
-    	end
-    	--[[
-        Object.keys(this.subscription_set).forEach(function (key) {
-            var parts = key.split(" ");
-            if debug_mode then
-                console.warn("sending pub/sub on_ready " + parts[0] + ", " + parts[1]);
-            end
-            self:send_command(parts[1], {parts[2]})
-        });
-        --]]
-    elseif self.monitoring then
-        self:send_command("monitor")
-    else
-        self:send_offline_queue()
-    end
-    self:emit("ready")
+	if self.selected_db then
+		self:send_command('select', {self.selected_db})
+	end
+	if self.pub_sub_mode == true then
+		for channel in pairs(self.subscription_set.sub) do
+			if debug_mode then
+				console.warn("sending pub/sub on_ready sub, " .. channel)
+			end
+			self:send_command("sub", {channel})
+		end
+		for channel in pairs(self.subscription_set.psub) do
+			if debug_mode then
+				console.warn("sending pub/sub on_ready psub, " .. channel)
+			end
+			self:send_command("psub", {channel})
+		end
+	elseif self.monitoring then
+		self:send_command("monitor")
+	else
+		self:send_offline_queue()
+	end
+	self:emit("ready")
 end
 
 function RedisClient:on_info_cmd (err, res)	-- implicit first arg, self
@@ -380,8 +371,8 @@ function RedisClient:on_info_cmd (err, res)	-- implicit first arg, self
 		if debug_mode then console.log("Redis server still loading, trying again in " .. retry_time) end
 		setTimeout(send_info_cmd, retry_time)
 		setTimeout(function ()
-            self:ready_check()
-        end, retry_time)
+			self:ready_check()
+		end, retry_time)
 	end
 end
 
@@ -391,7 +382,7 @@ function RedisClient:ready_check ()
 
 	if debug_mode then console.log("checking server ready state...") end
 
-	self.send_anyway = true     -- secret flag to send_command to send something even if not "ready"
+	self.send_anyway = true		-- secret flag to send_command to send something even if not "ready"
 	self:info(function(_, err, res)
 		self:on_info_cmd(err, res)
 	end)
@@ -448,8 +439,8 @@ function RedisClient:connection_gone (why)
 		self.retry_timer = nil
 		self.stream._events = {}	-- <-- this is a hack, don't let the stream emit more events
 		if debug_mode then
-            console.warn("connection ended from quit command, not retrying.")
-        end
+			console.warn("connection ended from quit command, not retrying.")
+		end
 		return
 	end
 
@@ -462,11 +453,11 @@ function RedisClient:connection_gone (why)
 	if self.max_attempts and self.attempts >= self.max_attempts then
 		self.retry_timer = nil
 		-- TODO - some people need a "Redis is Broken mode" for future commands that errors immediately, and others
-        -- want the program to exit.  Right now, we just log, which doesn't really help in either case.
-        console.error("redis-luanode: Couldn't get Redis connection after " .. self.max_attempts .. " attempts.")
-        return
-   	end
-   	
+		-- want the program to exit.  Right now, we just log, which doesn't really help in either case.
+		console.error("redis-luanode: Couldn't get Redis connection after " .. self.max_attempts .. " attempts.")
+		return
+	end
+	
 	self.attempts = self.attempts + 1
 	self:emit("reconnecting", {
 		delay = self.retry_delay,
@@ -482,10 +473,10 @@ function RedisClient:connection_gone (why)
 		if self.connect_timeout and self.retry_totaltime >= self.connect_timeout then
 			self.retry_timer = nil
 			-- TODO - engage Redis is Broken mode for future commands, or whatever
-            console.error("redis-luanode: Couldn't get Redis connection after " .. self.retry_totaltime .. "ms.")
-            return
-        end
-        
+			console.error("redis-luanode: Couldn't get Redis connection after " .. self.retry_totaltime .. "ms.")
+			return
+		end
+		
 		self.stream:connect(self.port, self.host)
 		self.retry_timer = nil
 	end, self.retry_delay)
@@ -543,11 +534,11 @@ end
 -- if a callback throws an exception, re-throw it on a new stack so the parser can keep going
 local function try_callback(self, callback, reply)
 	local ok, err = pcall(callback, self, nil, reply)
-    if not ok then
-        process.nextTick(function ()
-            error(err)
-        end)
-    end
+	if not ok then
+		process.nextTick(function ()
+			error(err)
+		end)
+	end
 end
 
 ---
@@ -571,7 +562,6 @@ function RedisClient:return_reply (reply)
 			-- TODO - confusing and error-prone that hgetall is special cased in two places
 			if reply and 'hgetall' == command_obj.command:lower() then
 				if type(reply) == "table" then
-					--console.warn("--> HGETALL", luanode.utils.inspect(reply), #reply)
 					reply = reply_to_object(reply)
 				end
 			end
@@ -589,7 +579,6 @@ function RedisClient:return_reply (reply)
 			elseif kind == "pmessage" then
 				self:emit("pmessage", reply[2], reply[3], reply[4]) -- pattern, channel, message
 			elseif kind == "subscribe" or kind == "unsubscribe" or kind == "psubscribe" or kind == "punsubscribe" then
-				--console.error("ACA", luanode.utils.inspect(reply))
 				if reply[3] == "0" then
 					self.pub_sub_mode = false
 					if debug_mode then
@@ -597,10 +586,10 @@ function RedisClient:return_reply (reply)
 					end
 				end
 				-- subscribe commands take an optional callback and also emit an event, but only the first response is included in the callback
-                -- TODO - document this or fix it so it works in a more obvious way
-                if command_obj and type(command_obj.callback) == "function" then
-                	try_callback(self, command_obj.callback, reply[2])
-                end
+				-- TODO - document this or fix it so it works in a more obvious way
+				if command_obj and type(command_obj.callback) == "function" then
+					try_callback(self, command_obj.callback, reply[2])
+				end
 				self:emit(kind, reply[2], tonumber(reply[3])) -- channel, count
 			else
 				error("subscriptions are active but got unknown reply type " .. kind)
@@ -609,7 +598,6 @@ function RedisClient:return_reply (reply)
 			error("subscriptions are active but got an invalid reply: " .. reply)
 		end
 	elseif self.monitoring then
-		--console.fatal(reply)
 		error("NOT IMPLEMENTED")
 		local timestamp, rest = reply:match([[([^%s]+)%s[^"]-(".+)]])
 		console.log("-->%s<--", rest)
@@ -640,158 +628,153 @@ end
 ---
 --
 function RedisClient:send_command (command, args, callback)
-    local stream = self.stream
-    local command_str = ""
-    local buffered_writes = 0
+	local stream = self.stream
+	local command_str = ""
+	local buffered_writes = 0
 
-    if type(command) ~= "string" then
-        error("First argument to send_command must be the command name string, not " .. type(command))
-    end
+	if type(command) ~= "string" then
+		error("First argument to send_command must be the command name string, not " .. type(command))
+	end
 
-    if type(args) == "table" then
-        if type(callback) == "function" then
-            -- probably the fastest way:
-            --     client.command([arg1, arg2], cb);  (straight passthrough)
-            --         send_command(command, [arg1, arg2], cb);
-        elseif not callback then
-            --// most people find this variable argument length form more convenient, but it uses arguments, which is slower
-            --//     client.command(arg1, arg2, cb);   (wraps up arguments into an array)
-            --//       send_command(command, [arg1, arg2, cb]);
-            --//     client.command(arg1, arg2);   (callback is optional)
-            --//       send_command(command, [arg1, arg2]);
-            if type(args[#args]) == "function" then
-                callback = table.remove(args)
-            end
-        else
-            error("send_command: last argument must be a callback or undefined")
-        end
-    else
-        error("send_command: second argument must be an array")
-    end
+	if type(args) == "table" then
+		if type(callback) == "function" then
+			-- probably the fastest way:
+			--     client.command([arg1, arg2], cb);  (straight passthrough)
+			--         send_command(command, [arg1, arg2], cb);
+		elseif not callback then
+			--// most people find this variable argument length form more convenient, but it uses arguments, which is slower
+			--//     client.command(arg1, arg2, cb);   (wraps up arguments into an array)
+			--//       send_command(command, [arg1, arg2, cb]);
+			--//     client.command(arg1, arg2);   (callback is optional)
+			--//       send_command(command, [arg1, arg2]);
+			if type(args[#args]) == "function" then
+				callback = table.remove(args)
+			end
+		else
+			error("send_command: last argument must be a callback or undefined")
+		end
+	else
+		error("send_command: second argument must be an array")
+	end
 
-    -- if the last argument is an array, expand it out.  This allows commands like this:
-    --     client.command(arg1, [arg2, arg3, arg4], cb);
-    --  and converts to:
-    --     client.command(arg1, arg2, arg3, arg4, cb);
-    -- which is convenient for some things like sadd
-    --if (args.length > 0 && Array.isArray(args[args.length - 1])) {
-        --args = args.slice(0, -1).concat(args[args.length - 1]);
-    --}
+	-- if the last argument is an array, expand it out.  This allows commands like this:
+	--     client.command(arg1, [arg2, arg3, arg4], cb);
+	--  and converts to:
+	--     client.command(arg1, arg2, arg3, arg4, cb);
+	-- which is convenient for some things like sadd
+	--if (args.length > 0 && Array.isArray(args[args.length - 1])) {
+		--args = args.slice(0, -1).concat(args[args.length - 1]);
+	--}
 
-    command_obj = Command(command, args, false, callback)
+	command_obj = Command(command, args, false, callback)
 
-    if (not self.ready and not self.send_anyway) or not stream.writable then
-        if debug_mode then
-            if not stream.writable then
-                console.log("send command: stream is not writeable.")
-            end
-            
-            console.log("Queueing %q for next server connection.", command)
-        end
-        table.insert(self.offline_queue, command_obj)
-        self.should_buffer = true
-        return false
-    end
+	if (not self.ready and not self.send_anyway) or not stream.writable then
+		if debug_mode then
+			if not stream.writable then
+				console.log("send command: stream is not writeable.")
+			end
+			
+			console.log("Queueing %q for next server connection.", command)
+		end
+		table.insert(self.offline_queue, command_obj)
+		self.should_buffer = true
+		return false
+	end
 
-    if command == "subscribe" or command == "psubscribe" or command == "unsubscribe" or command == "punsubscribe" then
-        self:pub_sub_command(command_obj)
-    elseif command == "monitor" then
-        self.monitoring = true
-    elseif command == "quit" then
-        self.closing = true
-    elseif self.pub_sub_mode == true then
-        error("Connection in pub/sub mode, only pub/sub commands may be used")
-    end
-    table.insert(self.command_queue, command_obj)
-    self.commands_sent = self.commands_sent + 1
+	if command == "subscribe" or command == "psubscribe" or command == "unsubscribe" or command == "punsubscribe" then
+		self:pub_sub_command(command_obj)
+	elseif command == "monitor" then
+		self.monitoring = true
+	elseif command == "quit" then
+		self.closing = true
+	elseif self.pub_sub_mode == true then
+		error("Connection in pub/sub mode, only pub/sub commands may be used")
+	end
+	table.insert(self.command_queue, command_obj)
+	self.commands_sent = self.commands_sent + 1
 
-    local buffer_args = false
+	local buffer_args = false
 
-    --elem_count = elem_count + args_len
-    local elem_count = #args + 1
+	--elem_count = elem_count + args_len
+	local elem_count = #args + 1
 
-    -- Always use "Multi bulk commands", but if passed any Buffer args, then do multiple writes, one for each arg
-    -- This means that using Buffers in commands is going to be slower, so use Strings if you don't already have a Buffer.
+	-- Always use "Multi bulk commands", but if passed any Buffer args, then do multiple writes, one for each arg
+	-- This means that using Buffers in commands is going to be slower, so use Strings if you don't already have a Buffer.
 
-    command_str = "*" .. elem_count .. "\r\n$" .. #command .. "\r\n" .. command .. "\r\n"
+	command_str = "*" .. elem_count .. "\r\n$" .. #command .. "\r\n" .. command .. "\r\n"
 
-    if not buffer_args then  -- Build up a string and send entire command in one write
-        --for i = 1, args_len do
-        for i = 1, #args do
-            local arg = args[i]
-            if type(arg) ~= "string" then
-                arg = tostring(arg)
-            end
-            command_str = command_str .. "$" .. #arg .. "\r\n" .. arg .. "\r\n"
-        end
-        if debug_mode then
-            console.log("send %s:%d id %d: %s", self.host, self.port, self.connection_id, command_str)
-        end
-        if not stream:write(command_str) then
-            buffered_writes = buffered_writes + 1
-        end
-    else
-        if debug_mode then
-            console.log("send command (%s) has Buffer arguments", command_str)
-        end
-        if not stream:write(command_str) then
-            buffered_writes = buffered_writes + 1
-        end
+	if not buffer_args then  -- Build up a string and send entire command in one write
+		for i = 1, #args do
+			local arg = args[i]
+			if type(arg) ~= "string" then
+				arg = tostring(arg)
+			end
+			command_str = command_str .. "$" .. #arg .. "\r\n" .. arg .. "\r\n"
+		end
+		if debug_mode then
+			console.log("send %s:%d id %d: %s", self.host, self.port, self.connection_id, command_str)
+		end
+		if not stream:write(command_str) then
+			buffered_writes = buffered_writes + 1
+		end
+	else
+		if debug_mode then
+			console.log("send command (%s) has Buffer arguments", command_str)
+		end
+		if not stream:write(command_str) then
+			buffered_writes = buffered_writes + 1
+		end
 
-        for i = 1, #args do
-            local arg = tostring(args[i])
+		for i = 1, #args do
+			local arg = tostring(args[i])
 
-            if debug_mode then
-                console.log("send_command: string send %d bytes: %s", #arg, arg)
-            end
-            if not stream:write("$" .. #arg .. "\r\n" .. arg .. "\r\n") then
-                buffered_writes = buffered_writes + 1
-            end
-        end
-    end
-    if debug_mode then
-        console.log("send_command buffered_writes: %d should_buffer: %s", buffered_writes, self.should_buffer)
-    end
-    if buffered_writes > 0 or #self.command_queue >= self.command_queue_high_water then
-        self.should_buffer = true
-    end
-    return not self.should_buffer
+			if debug_mode then
+				console.log("send_command: string send %d bytes: %s", #arg, arg)
+			end
+			if not stream:write("$" .. #arg .. "\r\n" .. arg .. "\r\n") then
+				buffered_writes = buffered_writes + 1
+			end
+		end
+	end
+	if debug_mode then
+		console.log("send_command buffered_writes: %d should_buffer: %s", buffered_writes, self.should_buffer)
+	end
+	if buffered_writes > 0 or #self.command_queue >= self.command_queue_high_water then
+		self.should_buffer = true
+	end
+	return not self.should_buffer
 end
 
 function RedisClient:pub_sub_command (command_obj)
-    
-    if self.pub_sub_mode == false and debug_mode then
-        console.log("Entering pub/sub mode from " .. command_obj.command)
-    end
-    self.pub_sub_mode = true
-    command_obj.sub_command = true
+	
+	if self.pub_sub_mode == false and debug_mode then
+		console.log("Entering pub/sub mode from " .. command_obj.command)
+	end
+	self.pub_sub_mode = true
+	command_obj.sub_command = true
 
-    local command = command_obj.command
-    local args = command_obj.args
-    local key
-    if command == "subscribe" or command == "psubscribe" then
-        if command == "subscribe" then
-            key = "sub"
-        else
-            key = "psub"
-        end
-        for i = 1, #args do
-            self.subscription_set[key][args[i]] = true
-        end
-    else
-        if command == "unsubscribe" then
-            key = "sub"
-        else
-            key = "psub"
-        end
-        for i = 1, #args do
-            self.subscription_set[key][args[i]] = nil
-        end
-        
-        for k,v in pairs(self.subscription_set[key]) do
-        	console.fatal("quedo", k,v)
-        end
-    end
+	local command = command_obj.command
+	local args = command_obj.args
+	local key
+	if command == "subscribe" or command == "psubscribe" then
+		if command == "subscribe" then
+			key = "sub"
+		else
+			key = "psub"
+		end
+		for i = 1, #args do
+			self.subscription_set[key][args[i]] = true
+		end
+	else
+		if command == "unsubscribe" then
+			key = "sub"
+		else
+			key = "psub"
+		end
+		for i = 1, #args do
+			self.subscription_set[key][args[i]] = nil
+		end
+	end
 end
 
 ---
@@ -881,13 +864,13 @@ end
 -- store db in self.select_db to restore it on reconnect
 function RedisClient:select (db, callback)
 	self:send_command('select', {db}, function (emitter, err, res)
-        if not err then
-            self.selected_db = db
-        end
-        if type(callback) == 'function' then
-            callback(emitter, err, res)
-        end
-    end)
+		if not err then
+			self.selected_db = db
+		end
+		if type(callback) == 'function' then
+			callback(emitter, err, res)
+		end
+	end)
 end
 RedisClient.SELECT = RedisClient.select
 
@@ -986,18 +969,14 @@ function Multi:exec (callback)
 	-- drain queue, callback will catch "QUEUED" or error
 	-- TODO - get rid of all of these anonymous functions which are elegant but slow
 	for index, args in ipairs(self.queue) do
-		--var command = args[0], obj;
-		--console.warn("queue", luanode.utils.inspect(args))
 		local args_copy = {}
 		local command = args[1]
-		--console.warn(command)
+		
 		if type(args[#args]) == "function" then
 			for i=2, #args - 1 do
 				args_copy[i - 1] = args[i]
 			end
-			--console.warn("cortado", luanode.utils.inspect(args))
 		else
-			--console.warn("por aca")
 			if type(args[2]) == "table" then
 				args_copy = args[2]
 			else
@@ -1006,10 +985,6 @@ function Multi:exec (callback)
 				end
 			end
 		end
-		--if #args == 2 then
-		--	args_copy = args[2]
-		--end
-		--console.warn("args_copy", command, luanode.utils.inspect(args_copy))
 		
 		if cmd == "hmset" and type(args[1]) == "table" then
 			error("NOT IMPLEMENTED")
@@ -1021,31 +996,21 @@ function Multi:exec (callback)
 		end
 		
 		self.client:send_command(command, args_copy, function (emitter, err, reply)
-			--console.warn("callback", command, emitter, err, reply, index)
-			--console.warn(self, emitter)
 			if err then
-				--console.error("callback err", emitter, err, reply)
 				local cur = self.queue[index]
 				if type(cur[#cur]) == "function" then
-					--console.error("callback err", emitter, err, reply, cur)
 					cur[#cur](self, err)
 				else
 					error(err)
 				end
-				--self.queue.splice(index, 1)
-				--console.warn("queue", luanode.utils.inspect(self.queue))
-				--self.queue = splice(self.queue, index + 2)
 				table.remove(self.queue, index)
-				--console.warn("queue", luanode.utils.inspect(self.queue))
 			end
 		end)
 	end
 
 	-- TODO - make this callback part of Multi.prototype instead of creating it each time
 	return self.client:send_command("EXEC", {}, function (emitter, err, replies)
-		--console.warn("EXEC callback", emitter, err, replies)
 		if err then
-			--console.error("EXEC callback", emitter, err, replies)
 			if callback then
 				callback(self, err)
 				return
@@ -1053,24 +1018,19 @@ function Multi:exec (callback)
 				error(err)
 			end
 		end
-
-
+		
 		if replies then
-			--console.warn("replies", luanode.utils.inspect(replies))
 			for index = 2, #self.queue do-- index, args in ipairs(self.queue) do
-				--console.warn("#replies", #replies)
 				local reply = replies[index - 1]
 				local args = self.queue[index]
 				-- Convert HGETALL reply to object
 				-- TODO - confusing and error-prone that hgetall is special cased in two places
 				if reply and args[1]:lower() == "hgetall" then
-					--console.warn("queue", index, luanode.utils.inspect(args), reply)
 					reply = reply_to_object(reply)
 					replies[index - 1] = reply
 				end
 
 				if type(args[#args]) == "function" then
-					--console.log("calling")
 					args[#args](self, nil, reply)
 				end
 			end
