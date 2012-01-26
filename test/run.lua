@@ -9,10 +9,13 @@ end
 
 package.path = "../src/?.lua;../src/?/init.lua;".. package.path
 
+local helpers = require "test_helpers"
+local Tasks = require "lua_ostasks"
+
+
+local redis = require "redis-luanode"
+
 local Barrier = require "siteswap.barrier"
-
-redis = require "redis-luanode"
-
 local Runner = require "siteswap.runner"
 local Test = require "siteswap.test"
 
@@ -27,9 +30,28 @@ AddTest = function(name, ...)
 end
 
 
-client1 = redis.createClient()
-client2 = redis.createClient()
-client3 = redis.createClient()
+--ejemplo de invocacion: lua5.1 run.lua --chatServer 192.168.22.210 --chatServerPort 1866
+local args = helpers.CommandLine[[
+redis-luanode testing parameters
+	-r,--redisServer (string default ?)             The address of the redis server
+	-s,--redisPort (number default ?)               The port number were redis will be listening
+	-p,--pause                                      Pauses the test before stopping helper processes
+	<tests...> (default ?)                          Tests to run (leave in blank to run all tests)
+]]
+
+local local_ip = helpers.GetHostAddress()
+
+local config_env = {
+	redis = {
+		host = args.redisServer or local_ip,
+		port = args.redisPort or 6379
+	},
+	test_db_num = 15, -- this DB will be flushed and used for testing
+}
+
+client1 = redis.createClient(config_env.redis.port, config_env.redis.host)
+client2 = redis.createClient(config_env.redis.port, config_env.redis.host)
+client3 = redis.createClient(config_env.redis.port, config_env.redis.host)
 
 client = client1 -- the main client instance
 
@@ -43,21 +65,25 @@ client:once("ready", barrier.join)
 client2:once("ready", barrier.join)
 client3:once("ready", barrier.join)
 
-runner:on("done", function()
+local with_errors = false
+
+runner:on("done", function(runner, errs)
+	with_errors = errs
+
 	client1:quit()
 	client2:quit()
 	client3:quit()
 end)
 
-local env = {
-	test_db_num = 15, -- this DB will be flushed and used for testing
-}
-
 barrier:on("ready", function()
 	client:select(test_db_num)
 	client2:select(test_db_num)
     client3:select(test_db_num)
-	runner:Run(env)
+	runner:Run(config_env)
 end)
 
 process:loop()
+
+if args.pause then
+	os.execute("pause")
+end

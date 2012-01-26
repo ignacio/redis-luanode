@@ -1,3 +1,4 @@
+local redis = require "redis-luanode"
 
 module(..., package.seeall)
 
@@ -354,13 +355,13 @@ AddTest("WATCH_MULTI", function (test)
 	end
 end)
 
-AddTest("socket_nodelay", function(test)
+AddTest("socket_nodelay", function(test, env)
 	local ready_count = 0
 	local quit_count = 0
 
-	local c1 = redis.createClient(nil, nil, {socket_nodelay = true})
-	local c2 = redis.createClient(nil, nil, {socket_nodelay = false})
-	local c3 = redis.createClient(nil, nil)
+	local c1 = redis.createClient(env.redis.port, env.redis.host, {socket_nodelay = true})
+	local c2 = redis.createClient(env.redis.port, env.redis.host, {socket_nodelay = false})
+	local c3 = redis.createClient(env.redis.port, env.redis.host)
 
 	local function quit_check()
 		quit_count = quit_count + 1
