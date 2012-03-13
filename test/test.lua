@@ -24,7 +24,7 @@ end
 function Test.require_number_any(test_case)
 	return function (emitter, err, results)
 		test_case:assert_nil(err, "result sent back unexpected error: " .. tostring(err))
-		test_case:assert_number(tonumber(results))
+		test_case:assert_number(results)
 		return true
 	end
 end
