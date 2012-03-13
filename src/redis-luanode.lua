@@ -867,7 +867,6 @@ integer_commands = {"zscore", "zincrby"}
 commands = set_substract(commands, integer_commands)
 
 for _, command in ipairs(commands) do
-	if command == "zscore" then error("crap") end
 	RedisClient[command] = function (self, args, callback, ...)
 		if type(args) == "table" then
 			if type(callback) == "function" then
