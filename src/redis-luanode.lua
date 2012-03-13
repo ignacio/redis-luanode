@@ -579,7 +579,7 @@ function RedisClient:return_reply (reply)
 			elseif kind == "pmessage" then
 				self:emit("pmessage", reply[2], reply[3], reply[4]) -- pattern, channel, message
 			elseif kind == "subscribe" or kind == "unsubscribe" or kind == "psubscribe" or kind == "punsubscribe" then
-				if reply[3] == "0" then
+				if reply[3] == 0 then
 					self.pub_sub_mode = false
 					if debug_mode then
 						console.log("All subscriptions removed, exiting pub/sub mode")
@@ -829,6 +829,25 @@ function set_union(seta, setb)
 	return t
 end
 
+-- return a new array, with all elements in seta which are not in setb
+function set_substract(seta, setb)
+	local obj = {}
+
+	local inverted_b = {}
+	for _, v in ipairs(setb) do
+		inverted_b[v] = true
+	end
+
+	local t = {}
+	-- builds an array
+	for _, v in ipairs(seta) do
+		if not inverted_b[v] then
+			t[#t + 1] = v
+		end
+	end
+	return t
+end
+
 -- This static list of commands is updated from time to time.  ./redis-luanode/commands.lua can be updated with generate_commands.lua
 commands = set_union({"get", "set", "setnx", "setex", "append", "strlen", "del", "exists", "setbit", "getbit", "setrange", "getrange", "substr",
 	"incr", "decr", "mget", "rpush", "lpush", "rpushx", "lpushx", "linsert", "rpop", "lpop", "brpop", "brpoplpush", "blpop", "llen", "lindex",
@@ -840,6 +859,11 @@ commands = set_union({"get", "set", "setnx", "setex", "append", "strlen", "del",
 	"bgrewriteaof", "shutdown", "lastsave", "type", "multi", "exec", "discard", "sync", "flushdb", "flushall", "sort", "info", "monitor", "ttl",
 	"persist", "slaveof", "debug", "config", "subscribe", "unsubscribe", "psubscribe", "punsubscribe", "publish", "watch", "unwatch", "cluster",
 	"restore", "migrate", "dump", "object", "client", "eval", "evalsha"}, require("redis-luanode.commands"))
+
+integer_commands = {"zscore", "zincrby"}
+
+-- remove commands that we want to deal with explicitly
+commands = set_substract(commands, integer_commands)
 
 for _, command in ipairs(commands) do
 	RedisClient[command] = function (self, args, callback, ...)
@@ -858,6 +882,73 @@ for _, command in ipairs(commands) do
 
 	Multi[command] = function (self, ...)
 		table.insert(self.queue, {command, ...})
+		return self
+	end
+	Multi[command:upper()] = Multi[command]
+end
+
+
+--
+-- These commands' response will be casted to an integer (like zscore, and so on)
+for _, command in ipairs(integer_commands) do
+	RedisClient[command] = function (self, ...)
+		local first_arg = select(1, ...)
+		if type(first_arg) == "table" then
+			-- we got command (args, callback)
+			local callback = select(2, ...)
+			return self:send_command(command, first_arg, function(emitter, err, res)
+				if not err then
+					callback(emitter, err, tonumber(res))
+				else
+					callback(emitter, err, res)
+				end
+			end)
+		else
+			local callback = select(select("#", ...), ...)
+			local args = {...}
+			-- override the callback with our wrapper
+			args[#args] = function(emitter, err, res)
+				if not err then
+					callback(emitter, err, tonumber(res))
+				else
+					callback(emitter, err, res)
+				end	
+			end
+			return self:send_command(command, args)
+		end
+	end
+
+	RedisClient[command:upper()] = RedisClient[command]
+
+	Multi[command] = function (self, ...)
+		local first_arg = select(1, ...)
+		if type(first_arg) == "table" then
+			-- we got command (args, callback)
+			local callback = select(2, ...)
+			local callback_wrap = function(emitter, err, res)
+				if not err then
+					callback(emitter, err, tonumber(res))
+				else
+					callback(emitter, err, res)
+				end
+			end
+			first_arg = clone(first_arg)
+			first_arg[#first_arg + 1] = callback_wrap
+			table.insert(self.queue, {command, unpack(first_arg)})
+		else
+			local callback = select(select("#", ...), ...)
+			local args = {...}
+			-- override the callback with our wrapper
+			args[#args] = function(emitter, err, res)
+				if not err then
+					callback(emitter, err, tonumber(res))
+				else
+					callback(emitter, err, res)
+				end	
+			end
+			table.insert(self.queue, {command, unpack(args)})
+		end
+
 		return self
 	end
 	Multi[command:upper()] = Multi[command]
@@ -973,7 +1064,6 @@ function Multi:exec (callback)
 	for index, args in ipairs(self.queue) do
 		local args_copy = {}
 		local command = args[1]
-		
 		if type(args[#args]) == "function" then
 			for i=2, #args - 1 do
 				args_copy[i - 1] = args[i]
