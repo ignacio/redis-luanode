@@ -1005,6 +1005,239 @@ AddTest("SUNIONSTORE", function (test)
 	end))
 end)
 
+
+-- Sorted set tests were adapted from Brian Hammond's redis-node-client.js, which has a comprehensive test suite
+
+AddTest("ZADD", function (test)
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+
+	-- Already added m0, just update the score to 50.
+	-- Redis returns 0 in this case.
+	client:zadd("zset0", 50, "m0", test:Last(test:require_number(0)))
+end)
+
+AddTest("ZREM", function (test)
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+	client:zrem("zset0", "m0", test:require_number(1))
+	client:zrem("zset0", "m0", test:Last(test:require_number(0)))
+end)
+
+AddTest("ZCARD", function (test)
+	client:zcard("zzzzz", test:require_number(0)) -- Does not exist
+	
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+	client:zadd("zset0", 100, "m1", test:require_number(1))
+
+	client:zcard("zset0", test:Last(test:require_number(2)))
+end)
+
+AddTest("ZSCORE", function (test)
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+	client:zadd("zset0", 200, "m1", test:require_number(1))
+
+	client:zscore("zset0", "m0", test:require_number(100))
+	client:zscore("zset0", "m1", test:require_number(200))
+
+	client:zscore("zset0", "zzzzz", test:Last(function (redis, err, res)
+		test:assert_nil(res)
+	end))
+end)
+
+AddTest("MULTI_ZSCORE", function (test)
+	
+	client:multi()
+		:del("zset0")
+		:zadd("zset0", 100, "m0", test:require_number(1))
+		:zadd("zset0", 200, "m1", test:require_number(1))
+		:zscore({"zset0", "m0"}, test:require_number(100))
+		:zscore("zset0", "m0", test:require_number(100))
+		:zscore({"zset0", "m1"}, test:require_number(200))
+		:zscore("zset0", "m1", test:require_number(200))
+		:zscore("zset0", "zzzzz", function (redis, err, res)
+			test:assert_nil(res)
+		end)
+		:exec(test:Last(function(redis, err, res)
+			test:assert_deep_equal({1, 1, 1, "100", "100", "200", "200"}, res)
+		end))
+end)
+
+AddTest("ZRANGE", function (test)
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+	client:zadd("zset0", 200, "m1", test:require_number(1))
+	client:zadd("zset0", 300, "m2", test:require_number(1))
+
+	client:zrange("zset0", 0, -1, function(redis, err, res)
+		test:assert_equal("m0", res[1])
+		test:assert_equal("m1", res[2])
+		test:assert_equal("m2", res[3])
+	end)
+
+	client:zrange("zset0", -1, -1, function(redis, err, res)
+		test:assert_equal("m2", res[1])
+	end)
+
+	client:zrange("zset0", -2, -1, function(redis, err, res)
+		test:assert_equal("m1", res[1])
+		test:assert_equal("m2", res[2])
+		test:Done()
+	end)
+end)
+
+AddTest("ZREVRANGE", function (test)
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+	client:zadd("zset0", 200, "m1", test:require_number(1))
+	client:zadd("zset0", 300, "m2", test:require_number(1))
+
+	client:zrevrange("zset0", 0, 1000, test:Last(function(redis, err, res)
+		test:assert_equal("m2", res[1])
+		test:assert_equal("m1", res[2])
+		test:assert_equal("m0", res[3])
+	end))
+end)
+
+AddTest("ZRANGEBYSCORE", function (test)
+	client:del("zset0")
+	client:zadd("zset0", 100, "m0", test:require_number(1))
+	client:zadd("zset0", 200, "m1", test:require_number(1))
+	client:zadd("zset0", 300, "m2", test:require_number(1))
+
+	client:zrangebyscore("zset0", 200, 300, function(redis, err, res)
+		test:assert_equal("m1", res[1])
+		test:assert_equal("m2", res[2])
+	end)
+
+	client:zrangebyscore("zset0", 100, 1000, function(redis, err, res)
+		test:assert_equal("m0", res[1])
+		test:assert_equal("m1", res[2])
+		test:assert_equal("m2", res[3])
+	end)
+
+	client:zrangebyscore("zset0", 1000, 10000, test:Last(function(redis, err, res)
+		test:assert_nil(next(res))
+	end))
+end)
+
+AddTest("ZCOUNT", function (test)
+	client:del("zset0")
+	
+	client:zcount("zset0", 0, 100, test:require_number(0))
+	
+	client:zadd("zset0", 1, "a", test:require_number(1))
+	client:zcount("zset0", 0, 100, test:require_number(1))
+
+	client:zadd("zset0", 2, "b", test:require_number(1))
+	client:zcount("zset0", 0, 100, test:Last(test:require_number(2)))
+end)
+
+AddTest("ZINCRBY", function (test)
+	client:del("zset0")
+
+	client:zadd("zset0", 1, "a", test:require_number(1))
+	client:zincrby("zset0", 1, "a", test:Last(test:require_number(2)))
+end)
+
+AddTest("ZINTERSTORE", function (test)
+	client:del("z0", "z1", "z2")
+	client:zadd("z0", 1, "a", test:require_number(1))
+	client:zadd("z0", 2, "b", test:require_number(1))
+	client:zadd("z1", 3, "a", test:require_number(1))
+	client:zinterstore("z2", 2, "z0", "z1", "AGGREGATE", "SUM", test:require_number(1))
+	client:zrange("z2", 0, -1, "WITHSCORES", test:Last(function (redis, err, res)
+		test:assert_nil(err)
+		test:assert_equal("a", res[1])
+		test:assert_equal("4", res[2])	-- score=1+3
+	end))
+end)
+
+AddTest("ZUNIONSTORE", function (test)
+	client:del("z0", "z1", "z2")
+
+	client:zadd("z0", 1, "a", test:require_number(1))
+	client:zadd("z0", 2, "b", test:require_number(1))
+	client:zadd("z1", 3, "a", test:require_number(1))
+	client:zunionstore("z2", 2, "z0", "z1", "AGGREGATE", "SUM", test:require_number(2))
+	client:zrange("z2", 0, -1, "WITHSCORES", test:Last(function (redis, err, res)
+		test:assert_nil(err)
+		test:assert_equal(0, #res % 2)
+		local set = {}
+		for i=1, #res, 2 do
+			set[res[i]] = tonumber(res[i + 1])
+		end
+		test:assert_deep_equal({a = 4, b = 2}, set)
+	end))
+end)
+
+AddTest("ZRANK", function (test)
+	client:del("z0")
+
+	client:zadd("z0", 1, "a", test:require_number(1))
+	client:zadd("z0", 2, "b", test:require_number(1))
+	client:zadd("z0", 3, "c", test:require_number(1))
+
+	client:zrank("z0", "a", test:require_number(0))
+	client:zrank("z0", "b", test:require_number(1))
+	client:zrank("z0", "c", test:Last(test:require_number(2)))
+end)
+
+AddTest("ZREVRANK", function (test)
+	client:del("z0")
+
+	client:zadd("z0", 1, "a", test:require_number(1))
+	client:zadd("z0", 2, "b", test:require_number(1))
+	client:zadd("z0", 3, "c", test:require_number(1))
+
+	client:zrevrank("z0", "a", test:require_number(2))
+	client:zrevrank("z0", "b", test:require_number(1))
+	client:zrevrank("z0", "c", test:Last(test:require_number(0)))
+end)
+
+AddTest("ZREMRANGEBYRANK", function (test)
+	client:del("z0")
+
+	client:zadd("z0", 1, "a", test:require_number(1))
+	client:zadd("z0", 2, "b", test:require_number(1))
+	client:zadd("z0", 3, "c", test:require_number(1))
+
+	client:zremrangebyrank("z0", -1, -1, test:require_number(1))
+
+	client:zrange("z0", 0, -1, "WITHSCORES", test:Last(function (redis, err, res)
+		test:assert_nil(err)
+		test:assert_equal(0, #res % 2)
+		local set = {}
+		for i=1, #res, 2 do
+			set[res[i]] = tonumber(res[i + 1])
+		end
+		test:assert_deep_equal({a = 1, b = 2}, set)
+	end))
+end)
+
+AddTest("ZREMRANGEBYSCORE", function (test)
+	client:del("z0")
+
+	client:zadd("z0", 1, "a", test:require_number(1))
+	client:zadd("z0", 2, "b", test:require_number(1))
+	client:zadd("z0", 3, "c", test:require_number(1))
+
+	-- inclusive
+	client:zremrangebyscore("z0", 2, 3, test:require_number(2))
+
+	client:zrange("z0", 0, -1, "WITHSCORES", test:Last(function (redis, err, res)
+		test:assert_nil(err)
+		test:assert_equal(0, #res % 2)
+		local set = {}
+		for i=1, #res, 2 do
+			set[res[i]] = tonumber(res[i + 1])
+		end
+		test:assert_deep_equal({a = 1}, set)
+	end))
+end)
+
 -- SORT test adapted from Brian Hammond's redis-node-client.js, which has a comprehensive test suite
 
 AddTest("SORT", function (test)
