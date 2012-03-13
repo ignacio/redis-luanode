@@ -836,15 +836,12 @@ function set_substract(seta, setb)
 		inverted_b[v] = true
 	end
 
+	local t = {}
+	-- builds an array
 	for _, v in ipairs(seta) do
 		if not inverted_b[v] then
-			obj[v] = true
+			t[#t + 1] = v
 		end
-	end
-	-- returns an array
-	local t = {}
-	for k in pairs(obj) do
-		t[#t + 1] = k
 	end
 	return t
 end
