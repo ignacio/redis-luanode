@@ -56,7 +56,14 @@ local m_dispatch = {
 	
 	[m_states.INTEGER_LINE] = function(self, incoming_buf, pos)
 		if incoming_buf:sub(pos, pos) == "\r" then
-			self:send_reply(table.concat(self.return_buffer))
+			local reply = table.concat(self.return_buffer)
+			local number = tonumber(reply)
+			if number then
+				self:send_reply(number)
+			else
+				self:parser_error("expected a number reply but instead got '" .. reply .. "'")
+				return false, pos
+			end
 			self.state = m_states.FINAL_LF
 		else
 			self.return_buffer[ #self.return_buffer + 1 ] = incoming_buf:sub(pos, pos)
