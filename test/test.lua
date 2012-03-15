@@ -556,6 +556,67 @@ AddTest("SUBSCRIBE_QUIT", function (test)
 	client3:subscribe("chan3")
 end)
 
+---
+-- Makes sure the client resubscribes when the connection is lost.
+AddTest("SUBSCRIBE_CLOSE_RESUSCRIBE", function (test, env)
+
+	local c1, c2 = redis.createClient(env.redis.port, env.redis.host)
+	local count = 0
+
+	-- Create two clients. c1 subscribes to two channels, c2 will publish to them.
+	-- c2 publishes the first message.
+	-- c1 gets the message and drops its connection. It must resubscribe itself.
+	-- When it resubscribes, c2 publishes the second message, on the same channel
+	-- c1 gets the message and drops its connection. It must resubscribe itself, again.
+	-- When it resubscribes, c2 publishes the third message, on the second channel
+	-- c1 gets the message and drops its connection. When it reconnects, the test ends.
+
+	c1:on("message", function(_, channel, message)
+		console.log(channel, message)
+		if channel == "chan1" then
+			test:assert_equal("hi on channel 1", message)
+			c1.stream:finish()
+		elseif channel == "chan2" then
+			test:assert_equal("hi on channel 2", message)
+			c1.stream:finish()
+		else
+			c1:quit()
+			c2:quit()
+			test:fail()
+		end
+	end)
+
+	c2 = redis.createClient(env.redis.port, env.redis.host)
+
+	c1:subscribe("chan1", "chan2")	
+
+	c2:once("ready", function()
+		console.log("c2 is ready")
+		c1:on("ready", function(emitter, err, results)
+			console.log("c1 is ready", count)
+
+			count = count + 1
+			if count == 1 then
+				c2:publish("chan1", "hi on channel 1")
+				return
+			elseif count == 2 then
+				c2:publish("chan2", "hi on channel 2")
+			else
+				c1:quit(function()
+					c2:quit(function()
+						test:Done()
+					end)
+				end)
+			end
+		end)
+
+		c2:publish("chan1", "hi on channel 1")
+
+	end)
+
+end)
+
+
 AddTest("EXISTS", function(test)
 	client:del("foo", "foo2", test:require_number_any())
 	client:set("foo", "bar", test:require_string("OK"))

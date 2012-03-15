@@ -319,18 +319,29 @@ function RedisClient:on_ready ()
 		self:send_command('select', {self.selected_db})
 	end
 	if self.pub_sub_mode == true then
+		-- only emit "ready" when all subscriptions were made again
+		local callback_count = 0
+		local callback = function()
+			callback_count = callback_count - 1
+			if callback_count == 0 then
+				self:emit("ready")
+			end
+		end
 		for channel in pairs(self.subscription_set.sub) do
 			if debug_mode then
 				console.warn("sending pub/sub on_ready sub, " .. channel)
 			end
-			self:send_command("subscribe", {channel})
+			callback_count = callback_count + 1
+			self:send_command("subscribe", {channel}, callback)
 		end
 		for channel in pairs(self.subscription_set.psub) do
 			if debug_mode then
 				console.warn("sending pub/sub on_ready psub, " .. channel)
 			end
-			self:send_command("psubscribe", {channel})
+			callback_count = callback_count + 1
+			self:send_command("psubscribe", {channel}, callback)
 		end
+		return
 	elseif self.monitoring then
 		self:send_command("monitor")
 	else
