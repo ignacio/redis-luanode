@@ -115,6 +115,8 @@ function RedisClient:__init (stream, options)
 	c.parser_module = nil
 	c.selected_db = nil		-- save the selected db here, used when reconnecting
 
+	c.old_state = nil
+
 	c.stream:on("connect", function(self)
 		c:on_connect()
 	end)
@@ -304,6 +306,13 @@ end
 function RedisClient:on_ready ()
 	
 	self.ready = true
+
+	if self.old_state then
+		self.monitoring = self.old_state.monitoring
+		self.pub_sub_mode = self.old_state.pub_sub_mode
+		self.selected_db = self.old_state.selected_db
+		self.old_state = nil
+	end
 	
 	-- magically restore any modal commands from a previous connection
 	if self.selected_db then
@@ -314,13 +323,13 @@ function RedisClient:on_ready ()
 			if debug_mode then
 				console.warn("sending pub/sub on_ready sub, " .. channel)
 			end
-			self:send_command("sub", {channel})
+			self:send_command("subscribe", {channel})
 		end
 		for channel in pairs(self.subscription_set.psub) do
 			if debug_mode then
 				console.warn("sending pub/sub on_ready psub, " .. channel)
 			end
-			self:send_command("psub", {channel})
+			self:send_command("psubscribe", {channel})
 		end
 	elseif self.monitoring then
 		self:send_command("monitor")
@@ -425,6 +434,18 @@ function RedisClient:connection_gone (why)
 	end
 	self.connected = false
 	self.ready = false
+
+	if not self.old_state then
+		local state = {
+			monitoring = self.monitoring,
+			pub_sub_mode = self.pub_sub_mode,
+			selected_db = self.selected_db
+		}
+		self.old_state = state
+		self.monitoring = false
+		self.pub_sub_mode = false
+		self.selected_db = nil
+	end
 
 	-- since we are collapsing end and close, users don't expect to be called twice
 	if not self.emitted_end then
