@@ -184,7 +184,7 @@ end
 -- No se
 --
 function GetHostName ()
-	local host = os.getenv("NODE_NAME") or socket.dns.gethostname() or "localhost"
+	local host = socket.dns.gethostname() or "localhost"
 	return host
 end
 
