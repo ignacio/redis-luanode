@@ -1,4 +1,4 @@
-local inconcert_devel = assert(os.getenv("INCONCERT_DEVEL"))
+local inconcert_devel = assert(os.getenv("INCONCERT_DEVEL"), "Missing environment variable 'INCONCERT_DEVEL'")
 
 local is_windows
 
@@ -29,17 +29,16 @@ _M.is_windows = is_windows
 ---
 -- Command-line Args
 --
-function CommandLine(...)
+function CommandLine (...)
  	local args = lapp(...)
 
 	for k,v in pairs(args) do
-		--print(k,v)
 		if v == "?" then
 			args[k] = nil
 		end
 	end
 	--Esto es porque se tiene el valor default que hay que quitar
-	if args.tests[1] == "?" then
+	if type(args.tests) == "table" and args.tests[1] == "?" then
 		args.tests[1]  = nil
 	end
 	return args
@@ -52,20 +51,7 @@ function RandomPort ()
 	
 	local selected_port
 	repeat
-		--[[
-		if is_windows then
-			local p = io.popen('cmd /C "echo %RANDOM%"')
-			selected_port = p:read("*l")
-			p:close()
-		else
-			local p = io.popen('shuf -i 2000-30000 -n 1')
-			selected_port = p:read("*l")
-			p:close()
-		end
-		--]]
 		selected_port = math.random(2000, 30000)
-		--print(selected_port)
-		--selected_port = 1900
 		
 		local p = io.popen("netstat -an")
 		for line in p:lines() do
@@ -82,7 +68,7 @@ end
 
 ---
 --
-function TriggerGC()
+function TriggerGC ()
 	for i=1,10 do collectgarbage() end
 end
 
@@ -93,12 +79,12 @@ end
 Config = {}
 
 ---
--- @param filename el nombre del archivo con el template.
+-- @param filename el nombre del archivo de salida.
 -- @param env una tabla con el environment para rellenar el template
 -- @param template_file el nombre del archivo con el template (opcional). Si es nil, se asume
 --           filename.template
 --
-function Config.CreateFile(filename, env, template_file)
+function Config.CreateFile (filename, env, template_file)
 	assert(filename and env)
 	
 	local input_file = assert(io.open(template_file or filename..".template", "rb"))
@@ -112,6 +98,18 @@ function Config.CreateFile(filename, env, template_file)
 	output_file:close()
 end
 
+function Config.CreateConfig (env, template_file)
+	assert(env and template_file)
+	
+	local input_file = assert(io.open(template_file, "rb"))
+	local template = input_file:read("*a")
+	input_file:close()
+	
+	local filled_template = cosmo.fill(template, env)
+	
+	return filled_template
+end
+
 ---
 -- Process startup
 --
@@ -119,7 +117,7 @@ Process = {}
 
 ---
 --
-local function tryToConnect(address, port)
+local function tryToConnect (address, port)
 	for i=1, 20 do
 		local client = socket.connect(address, port)
 		if client then
@@ -154,7 +152,7 @@ end
 ---
 -- Tests
 --
-function _M.TestLauncher(name, ...)	-- el _M es necesario, por culpa del package.seeall y que TestLauncher es global
+function _M.TestLauncher (name, ...)	-- el _M es necesario, por culpa del package.seeall y que TestLauncher es global
 	assert(type(name) == "string")
 	
 	local launcher = TestLauncher.TestLauncher(name, ...)
