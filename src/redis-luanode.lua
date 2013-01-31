@@ -360,13 +360,13 @@ function RedisClient:on_info_cmd (err, res)	-- implicit first arg, self
 	local info = {}
 	res:gsub('([^\r\n]*)\r\n', function(kv)
 		local k,v = kv:match(('([^:]*):([^:]*)'):rep(1))
-		if (k:match('db%d+')) then
+		if k and k:match('db%d+') then
 			info[k] = {}
 			v:gsub(',', function(dbkv)
 				local dbk,dbv = kv:match('([^:]*)=([^:]*)')
 				info[k][dbk] = dbv
 			end)
-		else
+		elseif k and v then
 			info[k] = v
 		end
 	end)
