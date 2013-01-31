@@ -1,3 +1,8 @@
+if not _LUANODE then
+	io.stderr:write("You must run this script with luanode. Like this:\n\tluanode run.lua\n")
+	return
+end
+
 package.path = ---[[d:\trunk_git\sources\LuaNode\lib\?.lua;d:\trunk_git\sources\LuaNode\lib\?\init.lua;]] ..
 	[[d:\trunk_git\sources\LuaNode\lib\?\init.lua;]] .. 
 	[[C:\LuaRocks\2.0\lua\?.lua;C:\LuaRocks\2.0\lua\?\init.lua;]] ..
