@@ -1179,6 +1179,16 @@ AddTest("ZRANGEBYSCORE", function (test)
 		test:assert_equal("m2", res[3])
 	end)
 
+	client:zrangebyscore("zset0", 100, "inf", "LIMIT", 0, 2, function(redis, err, res)
+		test:assert_equal("m0", res[1])
+		test:assert_equal("m1", res[2])
+	end)
+
+	client:zrangebyscore("zset0", 100, "inf", "LIMIT", 1, 2, function(redis, err, res)
+		test:assert_equal("m1", res[1])
+		test:assert_equal("m2", res[2])
+	end)
+
 	client:zrangebyscore("zset0", 1000, 10000, test:Last(function(redis, err, res)
 		test:assert_nil(next(res))
 	end))
