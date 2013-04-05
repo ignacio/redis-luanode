@@ -546,6 +546,11 @@ function RedisClient:return_error (err)
 		self.should_buffer = false
 	end
 
+	if self.options.metrics and command_obj then
+		command_obj.timestamps.received = process.hrtime()
+		self:emit("stats", command_obj)
+	end
+
 	if command_obj and type(command_obj.callback) == "function" then
 		local ok, err = pcall(command_obj.callback, self, err)
 		if not ok then
@@ -597,7 +602,10 @@ function RedisClient:return_reply (reply)
 					reply = reply_to_object(reply)
 				end
 			end
-			
+			if self.options.metrics then
+				command_obj.timestamps.received = process.hrtime()
+				self:emit("stats", command_obj)
+			end
 			try_callback(self, command_obj.callback, reply)
 		elseif debug_mode then
 			console.log("no callback for reply: " .. tostring(reply))-- && reply.toString && reply.toString()));
@@ -701,6 +709,11 @@ function RedisClient:send_command (command, args, callback)
 	--}
 
 	command_obj = Command(command, args, false, callback)
+	if self.options.metrics then
+		command_obj.timestamps = {
+			queued = process.hrtime()
+		}
+	end
 
 	if (not self.ready and not self.send_anyway) or not stream.writable then
 		if debug_mode then
@@ -748,12 +761,18 @@ function RedisClient:send_command (command, args, callback)
 		if debug_mode then
 			console.log("send %s:%d id %d: %s", self.host, self.port, self.connection_id, command_str)
 		end
+		if self.options.metrics then
+			command_obj.timestamps.sent = process.hrtime()
+		end
 		if not stream:write(command_str) then
 			buffered_writes = buffered_writes + 1
 		end
 	else
 		if debug_mode then
 			console.log("send command (%s) has Buffer arguments", command_str)
+		end
+		if self.options.metrics then
+			command_obj.timestamps.sent = process.hrtime()
 		end
 		if not stream:write(command_str) then
 			buffered_writes = buffered_writes + 1
