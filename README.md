@@ -1,5 +1,6 @@
-
 # redis-luanode #
+
+[![Build Status](https://travis-ci.org/ignacio/redis-luanode.png?branch=master)](https://travis-ci.org/ignacio/redis-luanode)
 
 Redis client for LuaNode.
 
