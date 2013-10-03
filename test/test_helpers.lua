@@ -1,30 +1,11 @@
-local inconcert_devel = assert(os.getenv("INCONCERT_DEVEL"), "Missing environment variable 'INCONCERT_DEVEL'")
-
-local is_windows
-
-if package.cpath:match("%.so") then
-	package.cpath = inconcert_devel..[[/bin/?.so;]]..package.cpath
-	is_windows = false
-else
-	package.cpath = inconcert_devel..[[/bin/?.dll;]]..package.cpath
-	is_windows = true
-end
-
-if is_windows then require "luarocks.require" end
-
 local lapp = require "lapp"
 local socket = require "socket"
-local cosmo = require "cosmo"
-
-local TestLauncher = require "luatestlauncher"
 
 -- Initialize the pseudo random number generator
 math.randomseed( os.time() )
 
 module(..., package.seeall)
 
-
-_M.is_windows = is_windows
 
 ---
 -- Command-line Args
@@ -79,38 +60,6 @@ end
 Config = {}
 
 ---
--- @param filename el nombre del archivo de salida.
--- @param env una tabla con el environment para rellenar el template
--- @param template_file el nombre del archivo con el template (opcional). Si es nil, se asume
---           filename.template
---
-function Config.CreateFile (filename, env, template_file)
-	assert(filename and env)
-	
-	local input_file = assert(io.open(template_file or filename..".template", "rb"))
-	local template = input_file:read("*a")
-	input_file:close()
-	
-	local filled_template = cosmo.fill(template, env)
-	
-	local output_file = assert(io.open(filename, "wb"))
-	output_file:write(filled_template)
-	output_file:close()
-end
-
-function Config.CreateConfig (env, template_file)
-	assert(env and template_file)
-	
-	local input_file = assert(io.open(template_file, "rb"))
-	local template = input_file:read("*a")
-	input_file:close()
-	
-	local filled_template = cosmo.fill(template, env)
-	
-	return filled_template
-end
-
----
 -- Process startup
 --
 Process = {}
@@ -146,36 +95,6 @@ function Process.StartAndWait (task_set, name, host, port, args)
 	end
 	
 	return pid
-end
-
-
----
--- Tests
---
-function _M.TestLauncher (name, ...)	-- el _M es necesario, por culpa del package.seeall y que TestLauncher es global
-	assert(type(name) == "string")
-	
-	local launcher = TestLauncher.TestLauncher(name, ...)
-	launcher.BeforeTest = function (test)
-		print( ("Starting test %q"):format(test) )
-	end
-
-	launcher.AfterTest = function (test, result, err)
-		print( ("Test %q => result: %q\n%s"):format(test, result, err or "") )	
-		TriggerGC()
-	end
-	
-	local oldRun = launcher.Run
-	launcher.Run = function(...)
-		local time_start = os.time()
-		local result = oldRun(...)
-		local time_end = os.time()
-		print( ("Tests took %d seconds"):format(time_end - time_start) )
-		launcher.SaveReport(name.."TestReport.xml")
-		return results
-	end
-	
-	return launcher
 end
 
 ---

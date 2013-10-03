@@ -11,9 +11,6 @@ local Test = require "siteswap.test"
 
 function Test.require_number(test_case, expected)
 	return function (emitter, err, results)
-		--table.foreach(getmetatable(test_case), print)
-		--console.warn(test_case, emitter, err, results)
-		--console.log(test_case.assert_equal)
 		test_case:assert_nil(err, "result sent back unexpected error: " .. tostring(err))
 		test_case:assert_equal(expected, results)
 		test_case:assert_number(results)
@@ -56,7 +53,6 @@ end
 
 function Test.require_error(test_case)
 	return function (emitter, err, results)
-		--console.error(emitter, err, results)
 		test_case:assert_not_nil(err, " err is nil, but an error is expected here.")
 		return true
 	end
@@ -65,7 +61,7 @@ end
 
 -- Tests are run in the order they are defined.  So FLUSHDB should be stay first.
 
-t = AddTest("FLUSHDB", function(test, env)
+AddTest("FLUSHDB", function(test, env)
 	client:select(env.test_db_num, test:require_string("OK"))
 	client2:select(env.test_db_num, test:require_string("OK"))
 	client3:select(env.test_db_num, test:require_string("OK"))
@@ -74,65 +70,49 @@ t = AddTest("FLUSHDB", function(test, env)
 	client:dbsize(test:Last(test:require_number(0)))
 end)
 
---[[
-t:on("done", function()
-    console.warn("pronto!")
-end)
---]]
-    
-    --t:on("done", function()
-        --console.warn("pronto!")
-    --end)
-    
-    --t:Run()
-    
-    --[[
-    Sync(function(wait, yield)
-        client:select(test_db_num, require_string("OK", name))
-        --client2:select(test_db_num, require_string("OK", name))
-        --client3:select(test_db_num, require_string("OK", name))
-        client:mset("flush keys 1", "flush val 1", "flush keys 2", "flush val 2", require_string("OK", name))
-        client:FLUSHDB(require_string("OK", name))
-        --client:dbsize(last(name, test:require_number(0, name)))
-        console.log("dbsize")
-        --client:dbsize(wait)
-        --client:dbsize(last(wait, test:require_number(0, name)))
-        client:dbsize(last(name, wait, test:require_number(0, name)))
-        --wait()
-        --client:dbsize(function()
-			--console.log("BLABLABLA")
-        --end)
-        local _, err, name = yield()
-        --require_number(0, name)
-        console.log("testsFLUSHDB fin")
-        
-        t:emit("done")
-        --yield()
-    end)
-    --]]
-	
-	--process:loop()
---end
-
-
+---
+-- Tests MULTI / EXEC with commands that fails to be queued.
+-- The behaviour has changed since Redis 2.6.5
+--
 AddTest("MULTI_1", function (test)
 
-	-- Provoke an error at queue time
-	local multi1 = client:multi()
-	multi1:mset("multifoo", "10", "multibar", "20", test:require_string("OK"))
-	multi1:set("foo2", test:require_error())
-	multi1:incr("multifoo", test:require_number(11))
-	multi1:incr("multibar", test:require_number(21))
-	multi1:exec()
+	local v1, v2, v3 = unpack(client.server_info.versions)
+	client:flushdb()
+	
+	if v1 >= 2 and v2 >= 6 and v3 >= 5 then
+		-- Since Redis 2.6.5, errors before EXEC aborts the whole MULTI.
+		-- Provoke an error at queue time
+		local multi1 = client:multi()
+		multi1:mset("multifoo", "10", "multibar", "20", test:require_string("OK"))
+		multi1:set("foo2", test:require_error())
+		multi1:incr("multifoo", test:require_number(11))
+		multi1:incr("multibar", test:require_number(21))
+		multi1:exec(function(_, err, replies)
+			test:assert_nil(replies)
+			test:assert_equal("EXECABORT Transaction discarded because of previous errors.", err)
 
-	-- Confirm that the previous command, while containing an error, still worked.
-	local multi2 = client:multi()
-	multi2:incr("multibar", test:require_number(22))
-	multi2:incr("multifoo", test:require_number(12))
-	multi2:exec(test:Last(function (emitter, err, replies)
-		test:assert_equal(22, replies[1])
-		test:assert_equal(12, replies[2])
-	end))
+			-- Make sure no command succeeded
+			client:exists("multifoo", test:Last(test:require_number(0)))
+		end)
+
+	else
+		-- Provoke an error at queue time
+		local multi1 = client:multi()
+		multi1:mset("multifoo", "10", "multibar", "20", test:require_string("OK"))
+		multi1:set("foo2", test:require_error())
+		multi1:incr("multifoo", test:require_number(11))
+		multi1:incr("multibar", test:require_number(21))
+		multi1:exec()
+
+		-- Confirm that the previous command, while containing an error, still worked.
+		local multi2 = client:multi()
+		multi2:incr("multibar", test:require_number(22))
+		multi2:incr("multifoo", test:require_number(12))
+		multi2:exec(test:Last(function (emitter, err, replies)
+			test:assert_equal(22, replies[1])
+			test:assert_equal(12, replies[2])
+		end))
+	end
 end)
 
 AddTest("MULTI_2", function (test)
@@ -147,7 +127,6 @@ AddTest("MULTI_2", function (test)
 			test:assert_equal("10", res[1])
 			test:assert_equal("20", res[2])
 		end},
-		{"set", "foo2", test:require_error()},
 		{"incr", "multifoo", test:require_number(11)},
 		{"incr", "multibar", test:require_number(21)}
 	
@@ -187,6 +166,9 @@ AddTest("MULTI_3", function (test)
 	end))
 end)
 
+---
+-- Test regular MULTI / EXEC
+--
 AddTest("MULTI_4", function (test)
 	
 	client:multi()
@@ -240,6 +222,54 @@ AddTest("MULTI_6", function (test)
 			test:assert_equal("here", replies[3].things)
 		end))
 end)
+
+---
+-- Tests a MULTI / EXEC with more than one failing command.
+-- Makes sure that callbacks are properly called.
+--
+-- TODO: callbacks in the presence of errors needs some work
+--[[
+AddTest("MULTI_7", function (test)
+
+	local v1, v2, v3 = unpack(client.server_info.versions)
+	client:flushdb()
+	
+	if v1 >= 2 and v2 >= 6 and v3 >= 5 then
+		-- Since Redis 2.6.5, errors before EXEC aborts the whole MULTI.
+		-- Provoke an error at queue time
+		local multi1 = client:multi()
+		multi1:mset("multifoo", "10", "multibar", "20", test:require_string("OK"))
+		multi1:set("foo2", test:require_error())
+		multi1:incr("multifoo", test:require_number(11))
+		multi1:set("foo3", test:require_error())
+		multi1:incr("multibar", test:require_number(21))
+		multi1:exec(function(_, err, replies)
+			console.warn(err, replies)
+			test:assert_nil(replies)
+			test:assert_equal("EXECABORT Transaction discarded because of previous errors.", err)
+
+			-- Make sure no command succeeded
+			client:exists("multifoo", test:Last(test:require_number(0)))
+		end)
+
+	else
+		console.log("aca")
+		-- Provoke an error at queue time
+		local multi1 = client:multi()
+		multi1:mset("multifoo", "10", "multibar", "20", test:require_string("OK"))
+		multi1:set("foo2", test:require_error())
+		--multi1:incr("multifoo", test:require_number(11))
+		multi1:incr("multifoo", function(_, ...) console.log("incr multifoo", ...) end)
+		multi1:set("foo3", test:require_error())
+		--multi1:incr("multibar", test:require_number(21))
+		multi1:incr("multibar", function(_, ...) console.log("incr multibar", ...) end)
+		multi1:exec(function(_, err, replies)
+			console.log("exec callback", err, unpack(replies or {}))
+			test:Done()
+		end)
+	end
+end)
+--]]
 
 --[===[
 AddTest("EVAL_1", function (test)
@@ -656,6 +686,7 @@ AddTest("KEYS", function (test)
 	client:KEYS("test keys*", test:Last(function (redis, err, results)
 		test:assert_nil(err, "result sent back unexpected error: " .. tostring(err))
 		test:assert_equal(2, #results)
+		table.sort(results)
 		test:assert_equal("test keys 1", results[1])
 		test:assert_equal("test keys 2", results[2])
 	end))
@@ -811,6 +842,7 @@ AddTest("SADD2", function (test)
 	client:sadd("set0", "member0", "member1", "member2", test:require_number(3))
 	client:smembers("set0", test:Last(function (redis, err, res)
 		test:assert_equal(#res, 3)
+		table.sort(res)
 		test:assert_deep_equal({"member0", "member1", "member2"}, res)
 	end))
 end)
@@ -822,7 +854,7 @@ AddTest("SISMEMBER", function (test)
 	client:sismember('set0', 'member1', test:Last(test:require_number(0)))
 end)
 
-AddTest("SCARD", function (test)   
+AddTest("SCARD", function (test)
 	client:del('set0')
 	client:sadd('set0', 'member0', test:require_number(1))
 	client:scard('set0', test:require_number(1))

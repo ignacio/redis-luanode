@@ -3,20 +3,9 @@ if not _LUANODE then
 	return
 end
 
-package.path = ---[[d:\trunk_git\sources\LuaNode\lib\?.lua;d:\trunk_git\sources\LuaNode\lib\?\init.lua;]] ..
-	[[d:\trunk_git\sources\LuaNode\lib\?\init.lua;]] .. 
-	[[C:\LuaRocks\2.0\lua\?.lua;C:\LuaRocks\2.0\lua\?\init.lua;]] ..
-	[[C:\LuaRocks\1.0\lua\?.lua;C:\LuaRocks\1.0\lua\?\init.lua;]] .. package.path
-
-if process.platform == "windows" then
-	require "luarocks.require"
-end
-
 package.path = "../src/?.lua;../src/?/init.lua;".. package.path
 
 local helpers = require "test_helpers"
-local Tasks = require "lua_ostasks"
-
 
 local redis = require "redis-luanode"
 
@@ -26,8 +15,8 @@ local Test = require "siteswap.test"
 
 local runner = Runner()
 
-AddTest = function(name, ...) 
-	if 
+AddTest = function(name, ...)
+	if name =="SADD2" or
 		true or
 	name == "socket_nodelay" then
 		return runner:AddTest(name, ...)
@@ -35,7 +24,7 @@ AddTest = function(name, ...)
 end
 
 
---ejemplo de invocacion: lua5.1 run.lua --chatServer 192.168.22.210 --chatServerPort 1866
+--
 local args = helpers.CommandLine[[
 redis-luanode testing parameters
 	-r,--redisServer (string default ?)             The address of the redis server
@@ -43,6 +32,11 @@ redis-luanode testing parameters
 	-p,--pause                                      Pauses the test before stopping helper processes
 	<tests...> (default ?)                          Tests to run (leave in blank to run all tests)
 ]]
+
+local function GetHostAddress ()
+	local host = GetHostName()
+	return socket.dns.toip(host)
+end
 
 local local_ip = helpers.GetHostAddress()
 
@@ -83,7 +77,7 @@ end)
 barrier:on("ready", function()
 	client:select(test_db_num)
 	client2:select(test_db_num)
-    client3:select(test_db_num)
+	client3:select(test_db_num)
 	runner:Run(config_env)
 end)
 

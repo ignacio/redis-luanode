@@ -8,10 +8,10 @@ Redis client for LuaNode, based on node-redis and redis-lua.
 	license = "MIT/X11"
 }
 dependencies = {
-	"lua >= 5.1"
+	"lua ~> 5.1"
 }
 source = {
-	url = "git://git.inconcert/inconcert-6/redis-luanode.git",
+	url = "git://github.com/ignacio/redis-luanode.git",
 	dir = "redis-luanode"
 }
 external_dependencies = {
