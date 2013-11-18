@@ -2,7 +2,7 @@ language: erlang
 
 env:
   global:
-    - LUAROCKS_BASE=luarocks-2.1.0
+    - LUAROCKS_BASE=luarocks-2.1.1
   matrix:
     - LUA=lua5.1 LUA_DEV=liblua5.1-dev LUA_VER=5.1 LUA_SFX=5.1 LUA_INCDIR=/usr/include/lua5.1 REDIS=2.4 REDIS_PORT=26379
     - LUA=lua5.1 LUA_DEV=liblua5.1-dev LUA_VER=5.1 LUA_SFX=5.1 LUA_INCDIR=/usr/include/lua5.1 REDIS=2.6 REDIS_PORT=6379
