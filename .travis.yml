@@ -5,7 +5,8 @@ env:
     - LUAROCKS_BASE=luarocks-2.1.1
   matrix:
     - LUA=lua5.1 LUA_DEV=liblua5.1-dev LUA_VER=5.1 LUA_SFX=5.1 LUA_INCDIR=/usr/include/lua5.1 REDIS=2.4 REDIS_PORT=26379
-    - LUA=lua5.1 LUA_DEV=liblua5.1-dev LUA_VER=5.1 LUA_SFX=5.1 LUA_INCDIR=/usr/include/lua5.1 REDIS=2.6 REDIS_PORT=6379
+    - LUA=lua5.1 LUA_DEV=liblua5.1-dev LUA_VER=5.1 LUA_SFX=5.1 LUA_INCDIR=/usr/include/lua5.1 REDIS=2.6 REDIS_PORT=26379
+    - LUA=lua5.1 LUA_DEV=liblua5.1-dev LUA_VER=5.1 LUA_SFX=5.1 LUA_INCDIR=/usr/include/lua5.1 REDIS=2.8 REDIS_PORT=6379
     #- LUA=lua5.2 LUA_DEV=liblua5.2-dev LUA_VER=5.2 LUA_SFX=5.2 LUA_INCDIR=/usr/include/lua5.2
     #- LUA=luajit LUA_DEV=libluajit-5.1-dev LUA_VER=5.1 LUA_SFX=jit LUA_INCDIR=/usr/include/luajit-2.0
 
@@ -18,6 +19,10 @@ before_install:
       chmod 777 travis/install_and_launch_redis_24.sh;
       travis/install_and_launch_redis_24.sh;
     fi
+  - if [ $REDIS = "2.6" ]; then
+    chmod 777 travis/install_and_launch_redis_26.sh;
+    travis/install_and_launch_redis_26.sh;
+  fi
   - echo $REDIS_PORT
   - sudo apt-get install $LUA
   - sudo apt-get install $LUA_DEV
