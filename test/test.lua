@@ -2,6 +2,9 @@ local redis = require "redis-luanode"
 
 module(..., package.seeall)
 
+local function version (a,b,c)
+	return a * 10^6 + b * 10 ^ 3 + c * 10^0
+end
 
 -- Set this to truthy to see the wire protocol and other debugging info
 --redis.debug_mode = process.argv[2]
@@ -78,8 +81,10 @@ AddTest("MULTI_1", function (test)
 
 	local v1, v2, v3 = unpack(client.server_info.versions)
 	client:flushdb()
-	
-	if v1 >= 2 and v2 >= 6 and v3 >= 5 then
+
+	console.log("Redis %d.%d.%d", v1, v2, v3)
+
+	if version(v1, v2, v3) >= version(2,6,5) then
 		-- Since Redis 2.6.5, errors before EXEC aborts the whole MULTI.
 		-- Provoke an error at queue time
 		local multi1 = client:multi()
