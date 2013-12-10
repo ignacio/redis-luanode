@@ -1,5 +1,5 @@
 #!/bin/sh -ex
-wget https://redis.googlecode.com/files/redis-2.6.16.tar.gz
+wget http://download.redis.io/releases/redis-2.6.16.tar.gz
 tar xzf redis-2.6.16.tar.gz
 cd redis-2.6.16
 make
