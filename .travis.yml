@@ -16,11 +16,9 @@ services:
 before_install:
   - env
   - if [ $REDIS = "2.4" ]; then
-      chmod 777 travis/install_and_launch_redis_24.sh;
       travis/install_and_launch_redis_24.sh;
     fi
   - if [ $REDIS = "2.6" ]; then
-      chmod 777 travis/install_and_launch_redis_26.sh;
       travis/install_and_launch_redis_26.sh;
     fi
   - echo $REDIS_PORT
