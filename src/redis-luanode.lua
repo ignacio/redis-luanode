@@ -374,6 +374,7 @@ function RedisClient:on_info_cmd (err, res)	-- implicit first arg, self
 	info.versions = {}
 	
 	for num in info.redis_version:gmatch("([^%.]+)") do
+		num = num:match("%d+")	-- deal with versions like 2.6.8-pre
 		table.insert(info.versions, tonumber(num))
 	end
 
