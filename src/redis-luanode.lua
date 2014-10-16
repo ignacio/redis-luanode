@@ -105,6 +105,11 @@ function RedisClient:__init (stream, options)
 	if type(options.connect_timeout) == "number" and options.connect_timeout > 0 then
 		c.connect_timeout = options.connect_timeout
 	end
+	c.enable_offline_queue = true
+	if type(options.enable_offline_queue) == "boolean" then
+		c.enable_offline_queue = options.enable_offline_queue
+	end
+
 	initialize_retry_vars(c)
 	c.pub_sub_mode = false
 	c.subscription_set = { sub = {}, psub = {} }
@@ -721,11 +726,22 @@ function RedisClient:send_command (command, args, callback)
 			if not stream.writable then
 				console.log("send command: stream is not writeable.")
 			end
-			
-			console.log("Queueing %q for next server connection.", command)
 		end
-		table.insert(self.offline_queue, command_obj)
-		self.should_buffer = true
+
+		if self.enable_offline_queue then
+			if debug_mode then console.log("Queueing %q for next server connection.", command) end
+			table.insert(self.offline_queue, command_obj)
+			self.should_buffer = true
+		else
+			error("send_command: stream not writeable. enable_offline_queue is false")
+			-- TODO: I need proper error handling in LuaNode
+			if command_obj.callback then
+				command_obj.callback(not_writeable_error)
+			else
+				--throw not_writeable_error
+			end
+		end
+
 		return false
 	end
 
