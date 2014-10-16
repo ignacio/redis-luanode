@@ -1,5 +1,7 @@
 local redis = require "redis-luanode"
 
+local crypto = require "luanode.crypto"
+
 module(..., package.seeall)
 
 local function version (a,b,c)
@@ -46,7 +48,7 @@ function Test.require_string(test_case, str)
 	end
 end
 
-function Test.require_null(test_case)
+function Test.require_nil(test_case)
 	return function (emitter, err, results)
 		test_case:assert_nil(err, "result sent back unexpected error: " .. tostring(err))
 		test_case:assert_nil(results)
@@ -276,103 +278,145 @@ AddTest("MULTI_7", function (test)
 end)
 --]]
 
---[===[
+
 AddTest("EVAL_1", function (test)
 
-    if (client.server_info.versions[0] >= 2 && client.server_info.versions[1] >= 9) {
-        // test {EVAL - Lua integer -> Redis protocol type conversion}
+	local v1, v2, v3 = unpack(client.server_info.versions)
+	client:flushdb()
+
+	console.log("Redis %d.%d.%d", v1, v2, v3)
+
+	if version(v1, v2, v3) >= version(2,6,0) then
+
+        -- test {EVAL - Lua integer -> Redis protocol type conversion}
         client:eval("return 100.5", 0, test:require_number(100))
-        // test {EVAL - Lua string -> Redis protocol type conversion}
+
+        -- test {EVAL - Lua string -> Redis protocol type conversion}
         client:eval("return 'hello world'", 0, test:require_string("hello world"))
-        // test {EVAL - Lua true boolean -> Redis protocol type conversion}
+        
+        -- test {EVAL - Lua true boolean -> Redis protocol type conversion}
         client:eval("return true", 0, test:require_number(1))
-        // test {EVAL - Lua false boolean -> Redis protocol type conversion}
-        client:eval("return false", 0, require_null())
-        // test {EVAL - Lua status code reply -> Redis protocol type conversion}
+        
+        -- test {EVAL - Lua false boolean -> Redis protocol type conversion}
+        client:eval("return false", 0, test:require_nil())
+        
+        -- test {EVAL - Lua status code reply -> Redis protocol type conversion}
         client:eval("return {ok='fine'}", 0, test:require_string("fine"))
-        // test {EVAL - Lua error reply -> Redis protocol type conversion}
-        client:eval("return {err='this is an error'}", 0, require_error())
-        // test {EVAL - Lua table -> Redis protocol type conversion}
-        client:eval("return {1,2,3,'ciao',{1,2}}", 0, function (err, res) {
-            assert.strictEqual(5, res.length)
-            assert.strictEqual(1, res[0])
-            assert.strictEqual(2, res[1])
-            assert.strictEqual(3, res[2])
-            assert.strictEqual("ciao", res[3])
-            assert.strictEqual(2, res[4].length)
-            assert.strictEqual(1, res[4][0])
-            assert.strictEqual(2, res[4][1])
-        })
-        // test {EVAL - Are the KEYS and ARGS arrays populated correctly?}
-        client:eval("return {KEYS[1],KEYS[2],ARGV[1],ARGV[2]}", 2, "a", "b", "c", "d", function (err, res) {
-            assert.strictEqual(4, res.length)
-            assert.strictEqual("a", res[0])
-            assert.strictEqual("b", res[1])
-            assert.strictEqual("c", res[2])
-            assert.strictEqual("d", res[3])
-        })
-        // test {EVAL - is Lua able to call Redis API?}
-        client:set("mykey", "myval")
-        client:eval("return redis.call('get','mykey')", 0, test:require_string("myval"))
-        // test {EVALSHA - Can we call a SHA1 if already defined?}
-        client:evalsha("9bd632c7d33e571e9f24556ebed26c3479a87129", 0, test:require_string("myval"))
-        // test {EVALSHA - Do we get an error on non defined SHA1?}
-        client:evalsha("ffffffffffffffffffffffffffffffffffffffff", 0, require_error())
-        // test {EVAL - Redis integer -> Lua type conversion}
-        client:set("x", 0)
-        client:eval("local foo = redis.call('incr','x')\n" + "return {type(foo),foo}", 0, function (err, res) {
-            assert.strictEqual(2, res.length)
-            assert.strictEqual("number", res[0])
-            assert.strictEqual(1, res[1])
-        })
-        // test {EVAL - Redis bulk -> Lua type conversion}
-        client:eval("local foo = redis.call('get','mykey') return {type(foo),foo}", 0, function (err, res) {
-            assert.strictEqual(2, res.length)
-            assert.strictEqual("string", res[0])
-            assert.strictEqual("myval", res[1])
-        })
-        // test {EVAL - Redis multi bulk -> Lua type conversion}
-        client:del("mylist")
-        client:rpush("mylist", "a")
-        client:rpush("mylist", "b")
-        client:rpush("mylist", "c")
-        client:eval("local foo = redis.call('lrange','mylist',0,-1)\n" + "return {type(foo),foo[1],foo[2],foo[3],# foo}", 0, function (err, res) {
-            assert.strictEqual(5, res.length)
-            assert.strictEqual("table", res[0])
-            assert.strictEqual("a", res[1])
-            assert.strictEqual("b", res[2])
-            assert.strictEqual("c", res[3])
-            assert.strictEqual(3, res[4])
-        })
-        // test {EVAL - Redis status reply -> Lua type conversion}
-        client:eval("local foo = redis.call('set','mykey','myval') return {type(foo),foo['ok']}", 0, function (err, res) {
-            assert.strictEqual(2, res.length)
-            assert.strictEqual("table", res[0])
-            assert.strictEqual("OK", res[1])
-        })
-        // test {EVAL - Redis error reply -> Lua type conversion}
-        client:set("mykey", "myval")
-        client:eval("local foo = redis.call('incr','mykey') return {type(foo),foo['err']}", 0, function (err, res) {
-            assert.strictEqual(2, res.length)
-            assert.strictEqual("table", res[0])
-            assert.strictEqual("ERR value is not an integer or out of range", res[1])
-        })
-        // test {EVAL - Redis nil bulk reply -> Lua type conversion}
-        client:del("mykey")
-        client:eval("local foo = redis.call('get','mykey') return {type(foo),foo == false}", 0, function (err, res) {
-            assert.strictEqual(2, res.length)
-            assert.strictEqual("boolean", res[0])
-            assert.strictEqual(1, res[1])
-        })
-        // test {EVAL - Script can't run more than configured time limit} {
-        client:config("set", "lua-time-limit", 1)
-        client:eval("local i = 0 while true do i=i+1 end", 0, test:Last("name", require_error()))
-    } else {
-        console.log("Skipping " + name + " because server version isn't new enough.")
-        next(name)
-    }
-}
---]===]
+        
+        -- test {EVAL - Lua error reply -> Redis protocol type conversion}
+        client:eval("return {err='this is an error'}", 0, test:require_error())
+        
+        -- test {EVAL - Lua table -> Redis protocol type conversion}
+        client:eval("return {1,2,3,'ciao',{1,2}}", 0, function (_, err, res)
+            test:assert_equal(5, #res)
+            test:assert_equal(1, res[1])
+            test:assert_equal(2, res[2])
+            test:assert_equal(3, res[3])
+            test:assert_equal("ciao", res[4])
+            test:assert_equal(2, #res[5])
+            test:assert_equal(1, res[5][1])
+            test:assert_equal(2, res[5][2])
+        end)
+        
+        -- test {EVAL - Are the KEYS and ARGS arrays populated correctly?}
+        client:eval("return {KEYS[1],KEYS[2],ARGV[1],ARGV[2]}", 2, "a", "b", "c", "d", function (_, err, res)
+            test:assert_equal(4, #res)
+            test:assert_equal("a", res[1])
+            test:assert_equal("b", res[2])
+            test:assert_equal("c", res[3])
+            test:assert_equal("d", res[4])
+        end)
+
+        -- test {EVAL - parameters in array format gives same result}
+        client:eval({"return {KEYS[1],KEYS[2],ARGV[1],ARGV[2]}", 2, "a", "b", "c", "d"}, function (_, err, res)
+            test:assert_equal(4, #res)
+            test:assert_equal("a", res[1])
+            test:assert_equal("b", res[2])
+            test:assert_equal("c", res[3])
+            test:assert_equal("d", res[4])
+        end)
+        
+        -- test {EVAL - Redis integer -> Lua type conversion}
+        client:set("incr key", 0)
+        client:eval("local foo = redis.call('incr','incr key'); return {type(foo),foo}", 0, function (_, err, res)
+            test:assert_equal(2, #res)
+            test:assert_equal("number", res[1])
+            test:assert_equal(1, res[2])
+        end)
+        
+        -- test {EVAL - Redis bulk -> Lua type conversion}
+        client:set("bulk reply key", "bulk reply value")
+        client:eval("local foo = redis.call('get','bulk reply key'); return {type(foo),foo}", 0, function (_, err, res)
+            test:assert_equal(2, #res)
+            test:assert_equal("string", res[1])
+            test:assert_equal("bulk reply value", res[2])
+        end)
+        
+        -- test {EVAL - Redis multi bulk -> Lua type conversion}
+        client:multi()
+        	:del("mylist")
+        	:rpush("mylist", "a")
+        	:rpush("mylist", "b")
+        	:rpush("mylist", "c")
+        	:exec(function(_, err, replies)
+        		test:assert(not err)
+        		client:eval("local foo = redis.call('lrange','mylist',0,-1); return {type(foo),foo[1],foo[2],foo[3],# foo}", 0,
+        		function (_, err, res)
+            		test:assert_equal(5, #res)
+            		test:assert_equal("table", res[1])
+            		test:assert_equal("a", res[2])
+		            test:assert_equal("b", res[3])
+		            test:assert_equal("c", res[4])
+		            test:assert_equal(3, res[5])
+        		end)
+        	end)
+
+        -- test {EVAL - Redis status reply -> Lua type conversion}
+        client:eval("local foo = redis.call('set','mykey','myval'); return {type(foo),foo['ok']}", 0, function (_, err, res)
+            test:assert_equal(2, #res)
+            test:assert_equal("table", res[1])
+            test:assert_equal("OK", res[2])
+        end)
+
+        -- test {EVAL - Redis error reply -> Lua type conversion}
+    	client:set("error reply key", "error reply value")
+        client:eval("local foo = redis.pcall('incr','error reply key'); return {type(foo),foo['err']}", 0, function (_, err, res)
+            test:assert(not err)
+            test:assert_equal(2, #res)
+            test:assert_equal("table", res[1])
+            test:assert_equal("ERR value is not an integer or out of range", res[2])
+    	end)
+
+        -- test {EVAL - Redis nil bulk reply -> Lua type conversion}
+        client:del("nil reply key")
+        client:eval("local foo = redis.call('get','nil reply key') return {type(foo),foo == false}", 0, function (_, err, res)
+            test:assert_equal(2, #res)
+            test:assert_equal("boolean", res[1])
+            test:assert_equal(1, res[2])
+        end)
+
+        -- this test is placed last, on purpose.
+        -- prepare sha sum for evalsha cache test
+        local source = "return redis.call('get', 'sha test')"
+        local sha = crypto.createHash("sha1"):update(source):final("hex")
+
+        client:set("sha test", "eval get sha test", function (_, err, res)
+        	test:assert(not err)
+        	-- test {EVAL - is Lua able to call Redis API?}
+        	client:eval(source, 0, function (_, err, res)
+            	test:require_string("eval get sha test")(_, err, res)
+            	-- test {EVALSHA - Can we call a SHA1 if already defined?}
+            	client:evalsha(sha, 0, test:require_string("eval get sha test"))
+            	-- test {EVALSHA - Do we get an error on non defined SHA1?}
+            	client:evalsha("ffffffffffffffffffffffffffffffffffffffff", 0, test:Last(test:require_error()))
+        	end)
+    	end)
+    else
+        console.log("Skipping EVAL_1 because server version isn't new enough.")
+        test:Done()
+    end
+end)
+
 
 AddTest("WATCH_MULTI", function (test)
 	local name = 'WATCH_MULTI'
@@ -382,12 +426,13 @@ AddTest("WATCH_MULTI", function (test)
 		client:incr(name)
 		local multi = client:multi()
 		multi:incr(name)
-		multi:exec(test:Last(test:require_null()))
+		multi:exec(test:Last(test:require_nil()))
 	else
 		console.log("Skipping " .. name .. " because server version isn't new enough.")
 		test:Skip()
 	end
 end)
+
 
 AddTest("socket_nodelay", function(test, env)
 	local ready_count = 0
@@ -441,6 +486,7 @@ AddTest("socket_nodelay", function(test, env)
 	c2:on("ready", ready_check)
 	c3:on("ready", ready_check)
 end)
+
 
 AddTest("reconnect", function (test, env)
 
