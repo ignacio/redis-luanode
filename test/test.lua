@@ -431,6 +431,9 @@ AddTest("SCRIPT_LOAD", function (test)
 			test:assert_equal(commandSha, result)
 			test:Done()
 		end)
+	else
+		console.log("Skipping SCRIPT_LOAD because server version isn't new enough.")
+		test:Done()
 	end
 end)
 
