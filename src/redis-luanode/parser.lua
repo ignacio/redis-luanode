@@ -3,6 +3,63 @@ local Class = require "luanode.class"
 
 local Parser = Class.InheritsFrom(EventEmitter)
 
+---
+-- The following is used when parsing multibulk replies.
+-- Think of a multibulk as a tree, were each reply is a leaf and each nested bulk reply is a node.
+-- Each bulk node is put in the stack. When we add a leaf, we add it to the node on top of the stack.
+-- After that, we check the stack, removing those nodes that are full (that is, all values for them have been received).
+--
+local Stack = {}
+local Stack_mt = { __index = Stack }
+
+function Stack.new ()
+	return setmetatable({}, Stack_mt)
+end
+
+--
+function Stack:push (item)
+	table.insert(self, item)
+end
+
+function Stack:pop ()
+	return table.remove(self)
+end
+
+function Stack:top()
+	return self[#self]
+end
+
+
+local Bulk = {}
+local Bulk_mt = { __index = Bulk }
+
+function Bulk.new (size)
+	local new = setmetatable({}, Bulk_mt)
+
+	new.pos = 0
+	new.size = size
+	return new
+end
+
+function Bulk:is_complete ()
+	--console.warn("Bulk:is_complete %s, pos: %d, size: %d", self, self.pos, self.size)
+	local complete = self.pos >= self.size
+	if complete then
+		-- remove this spurious properties. Beware, once a bulk node is deemed 'complete', it can never be queried
+		-- again. We do this to avoid copies.
+		self.pos = nil; self.size = nil
+	end
+	return complete
+end
+
+function Bulk:set (value)
+	self.pos = self.pos + 1
+	self[self.pos] = value
+	--console.warn("Bulk:set %s, pos: %d, value: %s", self, self.pos, value)
+end
+
+
+
 local m_states = {
 	TYPE = 1,
 	SINGLE_LINE = 2,
@@ -102,27 +159,31 @@ local m_dispatch = {
 	
 	[m_states.MULTI_BULK_COUNT_LF] = function(self, incoming_buf, pos)
 		if incoming_buf:sub(pos, pos) == "\n" then
-			if self.multi_bulk_length > 0 then	-- nested multi-bulk
-				self.multi_bulk_nested_length = self.multi_bulk_length
-				self.multi_bulk_nested_replies = self.multi_bulk_replies
-				self.multi_bulk_nested_pos = self.multi_bulk_pos
-			end
 
-			self.multi_bulk_length = tonumber(self.tmp_string)
-			self.multi_bulk_pos = 1 --0
+			local multi_bulk_length = tonumber(self.tmp_string)
+
 			self.state = m_states.TYPE
+			
+			-- a nil multi-bulk reply
+			if multi_bulk_length < 0 then
+				self:send_reply(nil)	-- beware with this. Maybe use a special sentinel (like redis.null)
+				self.stack = nil
+				self.root = nil
+			end
+			
+			local new_bulk = Bulk.new(multi_bulk_length)
+			if not self.stack then
+				self.stack = Stack.new()
+				self.root = new_bulk
+			end
+			local current = self.stack:top()
+			if current then
+				current:set(new_bulk)
+			end
+			self.stack:push(new_bulk)
 
-			if self.multi_bulk_length < 0 then
-				self:send_reply(nil)
-				self.multi_bulk_length = 0
-
-			elseif self.multi_bulk_length == 0 then
-				self.multi_bulk_pos = 1--0
-				self.multi_bulk_replies = nil
-				self:send_reply({})
-
-			else
-				self.multi_bulk_replies = {}--this.multi_bulk_length);
+			if multi_bulk_length == 0 then
+				self:send_reply()
 			end
 		else
 			self:parser_error("didn't see LF after NL reading multi bulk count")
@@ -144,8 +205,9 @@ local m_dispatch = {
 		if incoming_buf:sub(pos, pos) == "\n" then
 			self.bulk_length = tonumber(self.tmp_string)
 
+			-- a nil bulk reply
 			if self.bulk_length == -1 then
-				self:send_reply(nil)
+				self:send_reply(nil)	-- beware with this. Maybe use a special sentinel (like redis.null)
 				self.state = m_states.TYPE
 
 			elseif self.bulk_length == 0 then
@@ -213,12 +275,9 @@ function Parser:reset ()
 	self.return_buffer = {}
 	self.return_string = ""
 	self.tmp_string = ""	-- for holding size fields
-	
-	self.multi_bulk_length = 0
-	self.multi_bulk_replies = nil
-	self.multi_bulk_pos = 1--0
-	self.multi_bulk_nested_length = 0
-	self.multi_bulk_nested_replies = nil
+
+	self.stack = nil
+	self.root = nil
 	
 	self.state = m_states.TYPE
 end
@@ -249,7 +308,7 @@ end
 ---
 --
 function Parser:send_error (reply)
-	if self.multi_bulk_length > 0 or  self.multi_bulk_nested_length > 0 then
+	if self.stack then
 		--// TODO - can this happen?  Seems like maybe not.
 		self:add_multi_bulk_reply(reply)
 	else
@@ -260,7 +319,7 @@ end
 ---
 --
 function Parser:send_reply (reply)
-	if self.multi_bulk_length > 0 or self.multi_bulk_nested_length > 0 then
+	if self.stack then
 		self:add_multi_bulk_reply(reply)
 	else
 		self:emit("reply", reply)
@@ -268,37 +327,26 @@ function Parser:send_reply (reply)
 end
 
 ---
---
+-- Got a new value (leaf) to insert in the tree.
 function Parser:add_multi_bulk_reply (reply)
-	if self.multi_bulk_replies then
-		self.multi_bulk_replies[self.multi_bulk_pos] = reply
-		self.multi_bulk_pos = self.multi_bulk_pos + 1
-		if self.multi_bulk_pos <= self.multi_bulk_length then
-			return
-		end
-	else
-		self.multi_bulk_replies = reply
+	local stack = self.stack
+	
+	-- grab the top of the stack and add this new leaf.
+	local current = assert(stack:top())
+	current:set(reply)
+	
+	-- now go upwards, popping every node that is complete
+	current = stack:top()
+	while current and current:is_complete() do
+		stack:pop()
+		current = stack:top()
 	end
 
-	if self.multi_bulk_nested_length > 0 then
-		self.multi_bulk_nested_replies[self.multi_bulk_nested_pos] = self.multi_bulk_replies
-		self.multi_bulk_nested_pos = self.multi_bulk_nested_pos + 1
-
-		self.multi_bulk_length = 0
-		self.multi_bulk_replies = nil
-		self.multi_bulk_pos = 1--0
-
-		if self.multi_bulk_nested_length == self.multi_bulk_nested_pos - 1 then
-			self:emit("reply", self.multi_bulk_nested_replies)
-			self.multi_bulk_nested_length = 0
-			self.multi_bulk_nested_pos = 1--0;
-			self.multi_bulk_nested_replies = nil
-		end
-	else
-		self:emit("reply", self.multi_bulk_replies)
-		self.multi_bulk_length = 0
-		self.multi_bulk_replies = nil
-		self.multi_bulk_pos = 1--0;
+	-- the stack is empty, so we have the full multi bulk response
+	if not current then
+		self:emit("reply", self.root)
+		self.stack = nil
+		self.root = nil
 	end
 end
 

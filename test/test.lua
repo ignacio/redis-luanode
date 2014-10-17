@@ -1624,6 +1624,22 @@ AddTest("ENABLE_OFFLINE_QUEUE_FALSE", function (test)
 --]]
 end)
 
+
+AddTest("SLOWLOG", function (test)
+	client:config("set", "slowlog-log-slower-than", 0, test:require_string("OK"))
+	client:slowlog("reset", test:require_string("OK"))
+	client:set("foo", "bar", test:require_string("OK"))
+	client:get("foo", test:require_string("bar"))
+	client:slowlog("get", function (_, err, res)
+		test:assert_equal(3, #res)
+		test:assert_equal(2, #res[1][4])
+		test:assert_deep_equal(res[2][4], { "set", "foo", "bar" })
+		test:assert_deep_equal(res[3][4], { "slowlog", "reset" })
+		client:config("set", "slowlog-log-slower-than", 10000, test:require_string("OK"))
+		test:Done()
+	end)
+end)
+
 -- Exit immediately on connection failure, which triggers "exit", below, which fails the test
 client:on("error", function (self, err)
 	console.error("client: " .. err)
