@@ -4,10 +4,10 @@
 
 Redis client for LuaNode.
 
-**redis-luanode** is a [Redis][1] client for [LuaNode][2]. It is based on heavily (it is mostly a rewrite) on Matt Ranney's [node_redis][3] and 
-less so on Daniele Alessandri's [redis-lua][4]. 
+**redis-luanode** is a [Redis][1] client for [LuaNode][2]. It is based on heavily (it is mostly a rewrite) on
+Matt Ranney's [node_redis][3] and less so on Daniele Alessandri's [redis-lua][4].
 
-It supports all Redis commands, with the exception of *monitor* and *eval* (but that will be implemented soon).
+It supports most Redis commands, with the exception of *monitor*.
 
 ```lua
 local redis = require "redis-luanode"
@@ -32,6 +32,7 @@ process:loop()
   - Redis transactions (MULTI/EXEC).
   - Pub-Sub
   - Reconnection
+  - Scripting with Lua
 
 ## Installation #
 The easiest way to install is with [LuaRocks][5].
@@ -51,10 +52,10 @@ instance, open a shell in the *test* directory and type:
 luanode run.lua
 ```
 
-I've tested it with Redis 2.4.5, on both Windows and Linux.
+I've tested it with Redis 2.4.5, Redis 2.6.16 and Redis 2.8, on both Windows and Linux.
 
 ## Status #
-Currently, *MONITOR* and *EVAL* commands are not implemented yet.
+Currently, *MONITOR* is not implemented yet.
 
 ## Acknowledgments #
 I'd like to acknowledge the work of the following people:
