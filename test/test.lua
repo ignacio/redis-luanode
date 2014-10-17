@@ -456,6 +456,9 @@ AddTest("SCRIPT_EXISTS", function (test)
 				end)
 			end)
 		end)
+	else
+		console.log("Skipping SCRIPT_EXISTS because server version isn't new enough.")
+		test:Done()
 	end
 end)
 
