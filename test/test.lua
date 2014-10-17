@@ -288,6 +288,8 @@ AddTest("EVAL_1", function (test)
 
 	if version(v1, v2, v3) >= version(2,6,0) then
 
+		client:script("flush")
+
 		-- test {EVAL - Lua integer -> Redis protocol type conversion}
 		client:eval("return 100.5", 0, test:require_number(100))
 
@@ -414,6 +416,43 @@ AddTest("EVAL_1", function (test)
 	else
 		console.log("Skipping EVAL_1 because server version isn't new enough.")
 		test:Done()
+	end
+end)
+
+
+AddTest("SCRIPT_LOAD", function (test)
+	local command = "return 1"
+	local commandSha = crypto.createHash("sha1"):update(command):final("hex")
+
+	local v1, v2, v3 = unpack(client.server_info.versions)
+
+	if version(v1, v2, v3) >= version(2,6,0) then
+		client:script("load", command, function(_, err, result)
+			test:assert_equal(commandSha, result)
+			test:Done()
+		end)
+	end
+end)
+
+AddTest("SCRIPT_EXISTS", function (test)
+	local command = "return 2"
+	local commandSha = crypto.createHash("sha1"):update(command):final("hex")
+
+	local v1, v2, v3 = unpack(client.server_info.versions)
+
+	if version(v1, v2, v3) >= version(2,6,0) then
+		client:script("flush")
+
+		client:script("exists", commandSha, function(_, err, result)
+			test:assert_equal(0, result[1])
+			client:script("load", command, function(_, err, result)
+				test:assert_equal(commandSha, result)
+				client:script("exists", commandSha, function(_, err, result)
+					test:assert_equal(1, result[1])
+					test:Done()
+				end)
+			end)
+		end)
 	end
 end)
 
@@ -816,7 +855,7 @@ AddTest("MGET", function (test)
 	end)
 	client:MGET("mget keys 1", "some random shit", "mget keys 2", "mget keys 3", test:Last(function (redis, err, results)
 		test:assert_nil(err, "result sent back unexpected error: " .. tostring(err))
-		test:assert_equal(4, #results)
+		--test:assert_equal(4, #results)	-- not safe to use # because the array has holes
 		test:assert_equal("mget val 1", results[1])
 		test:assert_nil(results[2])
 		test:assert_equal("mget val 2", results[3])
@@ -1658,7 +1697,7 @@ client:on("reconnecting", function (self, params)
 	console.log("reconnecting: " .. luanode.utils.inspect(params))
 end)
 
-process:on('uncaughtException', function (err)
+process:on("uncaughtException", function (err)
 	console.error("Uncaught exception: " .. err)
 	process:exit(1)
 end)

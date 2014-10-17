@@ -9,6 +9,7 @@ As both source projects, this one is also MIT Licensed.
 
 local net = require "luanode.net"
 local EventEmitter = require "luanode.event_emitter"
+local Crypto = require "luanode.crypto"
 local Class = require "luanode.class"
 
 module(..., package.seeall)
@@ -926,7 +927,7 @@ commands = set_union({"get", "set", "setnx", "setex", "append", "strlen", "del",
 	"randomkey", "select", "move", "rename", "renamenx", "expire", "expireat", "keys", "dbsize", "auth", "ping", "echo", "save", "bgsave",
 	"bgrewriteaof", "shutdown", "lastsave", "type", "multi", "exec", "discard", "sync", "flushdb", "flushall", "sort", "info", "monitor", "ttl",
 	"persist", "slaveof", "debug", "config", "subscribe", "unsubscribe", "psubscribe", "punsubscribe", "publish", "watch", "unwatch", "cluster",
-	"restore", "migrate", "dump", "object", "client", "eval", "evalsha"}, require("redis-luanode.commands"))
+	"restore", "migrate", "dump", "object", "client", "eval", "evalsha", "script"}, require("redis-luanode.commands"))
 
 integer_commands = {"zscore", "zincrby"}
 
@@ -1050,6 +1051,39 @@ function RedisClient:auth (...)
 	end
 end
 RedisClient.AUTH = RedisClient.auth
+
+
+-- hook eval with an attempt to evalsha for cached scripts
+local function eval_helper (self, args, callback)
+	local script = args[1]
+	local script_sha = Crypto.createHash("sha1"):update(script):final("hex")
+
+	table.insert(args, function (emitter, err, reply)
+		if err and err:match("^NOSCRIPT") then
+			args[1] = script
+			self:send_command("eval", args, callback)
+		
+		elseif callback then
+			callback(emitter, err, reply)
+		end
+	end)
+	self:evalsha(unpack(args))
+end
+-- override eval (I'm starting to hate this 'pack everything into a table' helpers)
+function RedisClient:eval (args, callback, ...)
+	if type(args) == "table" then
+		if type(callback) == "function" then
+			return eval_helper(self, args, callback)
+		else
+			return eval_helper(self, args)
+		end
+	else
+		local packed = { args, callback, ... }
+		local cb = table.remove(packed)
+		return eval_helper(self, packed, cb)
+	end
+end
+
 
 function RedisClient:hmget (arg1, arg2, arg3, ...)
 	if type(arg2) == "table" and type(arg3) == "function" then
