@@ -428,6 +428,7 @@ AddTest("EVAL_2", function (test)
 
 	if version(v1, v2, v3) < version(2,6,0) then
 		test:Skip()
+		return
 	end
 
 	local script = [[
