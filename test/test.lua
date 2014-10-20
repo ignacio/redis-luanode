@@ -424,6 +424,12 @@ end)
 -- Makes sure EVAL sends the correct number of arguments (evalsha was ok but ev)
 --
 AddTest("EVAL_2", function (test)
+	local v1, v2, v3 = unpack(client.server_info.versions)
+
+	if version(v1, v2, v3) < version(2,6,0) then
+		test:Skip()
+	end
+
 	local script = [[
 		return { #KEYS, #ARGV }
 	]]
