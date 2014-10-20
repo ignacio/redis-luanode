@@ -16,9 +16,9 @@ local Test = require "siteswap.test"
 local runner = Runner()
 
 AddTest = function(name, ...)
-	if name =="SADD2" or
-		true or
-	name == "socket_nodelay" then
+	if name =="EVAL_2"
+	or true
+	then
 		return runner:AddTest(name, ...)
 	end
 end

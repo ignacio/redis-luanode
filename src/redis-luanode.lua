@@ -1058,9 +1058,11 @@ local function eval_helper (self, args, callback)
 	local script = args[1]
 	local script_sha = Crypto.createHash("sha1"):update(script):final("hex")
 
+	args[1] = script_sha
 	table.insert(args, function (emitter, err, reply)
 		if err and err:match("^NOSCRIPT") then
 			args[1] = script
+			table.remove(args) -- remove this callback
 			self:send_command("eval", args, callback)
 		
 		elseif callback then

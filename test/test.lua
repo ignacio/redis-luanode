@@ -420,6 +420,26 @@ AddTest("EVAL_1", function (test)
 end)
 
 
+---
+-- Makes sure EVAL sends the correct number of arguments (evalsha was ok but ev)
+--
+AddTest("EVAL_2", function (test)
+	local script = [[
+		return { #KEYS, #ARGV }
+	]]
+
+	-- EVAL was sending one more argument, but EVALSHA was ok, se we first clear the script cache
+	client:script("flush")
+
+	client:eval(script, 3, "key_1", "key_2", "key_3", "arg_1", "arg_2", "arg_3", "arg_4", function(_, err, res)
+		console.log(luanode.utils.inspect(res, true, 90, true))
+		test:assert_equal(3, res[1])
+		test:assert_equal(4, res[2])
+		test:Done()
+	end)
+end)
+
+
 AddTest("SCRIPT_LOAD", function (test)
 	local command = "return 1"
 	local commandSha = crypto.createHash("sha1"):update(command):final("hex")
